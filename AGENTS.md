@@ -84,11 +84,22 @@ portrange = ($SLSK_PORT, $SLSK_PORT)
 $(grep -E '^(downloaddir|incompletedir|uploaddir|shared) =' ~/.config/psycheseek/config)
 EOF
 
-WEB_PORT=$WEB_PORT WEB_HOST=127.0.0.1 .venv/bin/python pseek -d -c "$DIR/config" -u "$DIR/data"
+WEB_PORT=$WEB_PORT WEB_HOST=127.0.0.1 nohup .venv/bin/python pseek -d \
+  -c "$DIR/config" -u "$DIR/data" > "$DIR/daemon.log" 2>&1 < /dev/null &
+
+until curl -sf "http://127.0.0.1:$WEB_PORT/auth/me" >/dev/null; do sleep 1; done
 ```
 
-Shut down your own daemon by PID (`kill <pid>`). Never `pkill -f pseek` — that
-kills other sessions' daemons and the human's.
+Launch with `nohup ... &` (detached, log to a file) rather than as a supervised
+background job — session teardown sends SIGTERM to tracked children, which
+silently kills the daemon mid-use.
+
+To shut down your own daemon, resolve its PID from the web port —
+`kill $(lsof -t -iTCP:$WEB_PORT -sTCP:LISTEN)`. Do not trust the launcher's
+`$!`: pseek forks, so the shell's child PID is not the daemon, and killing it
+leaves the real process holding both ports (and rewriting the config on its
+eventual exit, clobbering any reseeding you did in between). Never
+`pkill -f pseek` — that kills other sessions' daemons and the human's.
 
 ## Coding Style & Naming Conventions
 
