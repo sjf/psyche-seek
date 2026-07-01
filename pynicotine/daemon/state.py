@@ -3,6 +3,7 @@
 
 import hashlib
 import hmac
+import io
 import json
 import os
 import threading
@@ -10,10 +11,13 @@ import time
 
 from collections import deque
 
+from PIL import Image, ImageOps
+
 from pynicotine.config import config
 from pynicotine.core import core
 from pynicotine.events import events
 from pynicotine.slskmessages import FileListMessage
+from pynicotine.slskmessages import UserInfoRequest
 from pynicotine.slskmessages import UserStatus
 from pynicotine.transfers import TransferStatus
 from pynicotine.utils import clean_file
@@ -24,6 +28,9 @@ from pynicotine.daemon.trees import build_user_tree
 
 USER_TREE_CACHE_TTL = 24 * 60 * 60  # keep a browsed user's listing for at least a day
 USER_BROWSE_TIMEOUT = 45  # give up on an unresponsive user after this many seconds
+USER_INFO_CACHE_TTL = 7 * 24 * 60 * 60  # keep profile pic + description for a week
+USER_INFO_TIMEOUT = 30  # give up on an unresponsive user's profile after this many seconds
+USER_THUMB_SIZE = 96  # square profile-picture thumbnail edge, in pixels
 SEARCH_CACHE_TTL = 24 * 60 * 60  # keep search results on disk for at least a day
 SEARCH_QUIET_PERIOD = 20   # a live search is "complete" once no new results arrive for this long
 SEARCH_MAX_DURATION = 180  # ... or once this many seconds pass since it started, whichever is first
@@ -64,7 +71,8 @@ class DaemonState:
                  "pending_requests", "_pending_request_id", "_pending_login",
                  "_user_browse_status", "_user_browse_progress", "_user_browse_started",
                  "_user_tree_cache", "connection_info", "portmap_info",
-                 "download_path_overrides")
+                 "download_path_overrides", "_user_info_cache", "_user_info_status",
+                 "_user_info_started")
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -86,6 +94,9 @@ class DaemonState:
         self._user_browse_progress = {}
         self._user_browse_started = {}
         self._user_tree_cache = {}
+        self._user_info_cache = {}
+        self._user_info_status = {}
+        self._user_info_started = {}
         self.connection_info = ""
         self.portmap_info = ""
         self.download_path_overrides = {}
@@ -537,6 +548,257 @@ class DaemonState:
             if entry is None:
                 return "complete"
             return compute_search_state(entry, time.time(), self.max_search_results)
+
+    # --- user info (profile picture + description), cached for a week ---------
+
+    def get_user_info_state(self, username):
+        """Current profile state for a user, without blocking.
+
+        The frontend calls this once per user shown in a result list. A profile
+        request is kicked off on demand; the picture and description are cached
+        (memory + disk) for a week, so repeat views return instantly.
+        """
+        if not username:
+            return {"status": "error", "description": "", "has_pic": False}
+
+        now = time.time()
+
+        with self._lock:
+            cached = self._user_info_cache.get(username)
+            if cached and now - cached["cached_at"] < USER_INFO_CACHE_TTL:
+                return self._user_info_payload(cached)
+
+            status = self._user_info_status.get(username)
+            if status == "loading":
+                started = self._user_info_started.get(username, now)
+                if now - started <= USER_INFO_TIMEOUT:
+                    return {"status": "loading", "description": "", "has_pic": False}
+                self._user_info_status[username] = "error"
+                return {"status": "error", "description": "", "has_pic": False}
+
+        disk_entry = self._load_cached_user_info(username)
+        if disk_entry is not None:
+            with self._lock:
+                self._user_info_cache[username] = disk_entry
+            return self._user_info_payload(disk_entry)
+
+        return self.start_user_info(username)
+
+    def start_user_info(self, username, force=False):
+        """Request a user's profile unless one is already cached or in flight.
+
+        force=True re-requests from the peer even when a fresh copy is cached
+        (used when a user's page / file listing is opened), refreshing the cache.
+        An in-flight request is still coalesced.
+        """
+        if not username:
+            return {"status": "error", "description": "", "has_pic": False}
+
+        now = time.time()
+        with self._lock:
+            cached = self._user_info_cache.get(username)
+            if not force and cached and now - cached["cached_at"] < USER_INFO_CACHE_TTL:
+                return self._user_info_payload(cached)
+
+            if self._user_info_status.get(username) == "loading":
+                started = self._user_info_started.get(username, now)
+                if now - started <= USER_INFO_TIMEOUT:
+                    return {"status": "loading", "description": "", "has_pic": False}
+
+            self._user_info_status[username] = "loading"
+            self._user_info_started[username] = now
+
+        events.invoke_main_thread(self._request_user_info_main_thread, username)
+        return {"status": "loading", "description": "", "has_pic": False}
+
+    def _request_user_info_main_thread(self, username):
+        if username:
+            core.send_message_to_peer(username, UserInfoRequest())
+
+    def on_user_info_response(self, msg):
+        username = getattr(msg, "username", None)
+        if not username:
+            return
+
+        pic = getattr(msg, "pic", None) or None
+        entry = {
+            "description": getattr(msg, "descr", "") or "",
+            "has_pic": bool(pic),
+            "mime": self._detect_image_mime(pic) if pic else "",
+            "cached_at": time.time(),
+        }
+        with self._lock:
+            self._user_info_cache[username] = entry
+            self._user_info_status[username] = "ready"
+        self._save_cached_user_info(username, entry, pic)
+
+    def get_user_pic(self, username, thumb=False):
+        """Return (bytes, mime) for a cached profile picture, or None.
+
+        With thumb=True, serve the small square thumbnail, generating it on
+        demand if missing (e.g. pictures cached before thumbnails existed) and
+        falling back to the full picture if the image can't be thumbnailed.
+        """
+        if not username:
+            return None
+
+        json_path, pic_path, thumb_path = self._user_info_cache_paths(username)
+        try:
+            encoded_json = encode_path(json_path)
+            encoded_pic = encode_path(pic_path)
+            if not os.path.isfile(encoded_pic) or not os.path.isfile(encoded_json):
+                return None
+            if time.time() - os.path.getmtime(encoded_json) >= USER_INFO_CACHE_TTL:
+                return None
+            with open(encoded_json, "r", encoding="utf-8") as file_handle:
+                meta = json.load(file_handle)
+        except (OSError, ValueError):
+            return None
+
+        if thumb:
+            encoded_thumb = encode_path(thumb_path)
+            try:
+                if os.path.isfile(encoded_thumb):
+                    with open(encoded_thumb, "rb") as file_handle:
+                        cached_thumb = file_handle.read()
+                    if cached_thumb:
+                        return cached_thumb, "image/png"
+            except OSError:
+                pass
+
+            # No thumbnail on disk yet: build one from the full picture.
+            try:
+                with open(encoded_pic, "rb") as file_handle:
+                    full = file_handle.read()
+            except OSError:
+                return None
+            thumb_bytes = self._make_thumbnail(full)
+            if thumb_bytes:
+                try:
+                    with open(encoded_thumb, "wb") as file_handle:
+                        file_handle.write(thumb_bytes)
+                except OSError:
+                    pass
+                return thumb_bytes, "image/png"
+            # Thumbnailing failed (undecodable image): fall back to the full pic.
+
+        try:
+            with open(encoded_pic, "rb") as file_handle:
+                data = file_handle.read()
+        except OSError:
+            return None
+        if not data:
+            return None
+        return data, meta.get("mime") or "application/octet-stream"
+
+    @staticmethod
+    def _user_info_payload(entry):
+        return {
+            "status": "ready",
+            "description": entry.get("description", ""),
+            "has_pic": bool(entry.get("has_pic")),
+            "cached_at": int(entry.get("cached_at", 0)),
+        }
+
+    @staticmethod
+    def _detect_image_mime(data):
+        if not data:
+            return ""
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image/png"
+        if data[:2] == b"\xff\xd8":
+            return "image/jpeg"
+        if data[:6] in (b"GIF87a", b"GIF89a"):
+            return "image/gif"
+        if data[:2] == b"BM":
+            return "image/bmp"
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return "image/webp"
+        return "application/octet-stream"
+
+    @staticmethod
+    def _user_info_cache_paths(username):
+        cache_dir = os.path.join(config.data_folder_path, "userinfo")
+        base = os.path.join(cache_dir, clean_file(username))
+        return base + ".json", base + ".pic", base + ".thumb"
+
+    @staticmethod
+    def _make_thumbnail(pic_bytes):
+        """Square, center-cropped PNG thumbnail. Returns None only if the image
+        can't be decoded (caller then falls back to serving the full picture)."""
+        if not pic_bytes:
+            return None
+        try:
+            with Image.open(io.BytesIO(pic_bytes)) as img:
+                img = ImageOps.exif_transpose(img)
+                has_alpha = img.mode in ("RGBA", "LA", "PA") or (
+                    img.mode == "P" and "transparency" in img.info)
+                img = img.convert("RGBA" if has_alpha else "RGB")
+                width, height = img.size
+                side = min(width, height)
+                if side <= 0:
+                    return None
+                left = (width - side) // 2
+                top = (height - side) // 2
+                img = img.crop((left, top, left + side, top + side))
+                img = img.resize((USER_THUMB_SIZE, USER_THUMB_SIZE), Image.LANCZOS)
+                out = io.BytesIO()
+                img.save(out, format="PNG", optimize=True)
+                return out.getvalue()
+        except Exception:
+            return None
+
+    def _load_cached_user_info(self, username):
+        json_path, _pic_path, _thumb_path = self._user_info_cache_paths(username)
+        try:
+            encoded = encode_path(json_path)
+            if not os.path.isfile(encoded):
+                return None
+            if time.time() - os.path.getmtime(encoded) >= USER_INFO_CACHE_TTL:
+                return None
+            with open(encoded, "r", encoding="utf-8") as file_handle:
+                data = json.load(file_handle)
+        except (OSError, ValueError):
+            return None
+
+        return {
+            "description": data.get("description", ""),
+            "has_pic": bool(data.get("has_pic")),
+            "mime": data.get("mime", ""),
+            "cached_at": data.get("cached_at", time.time()),
+        }
+
+    def _save_cached_user_info(self, username, entry, pic):
+        json_path, pic_path, thumb_path = self._user_info_cache_paths(username)
+        thumb = self._make_thumbnail(pic) if pic else None
+        try:
+            cache_dir = os.path.join(config.data_folder_path, "userinfo")
+            os.makedirs(encode_path(cache_dir), exist_ok=True)
+            with open(encode_path(json_path), "w", encoding="utf-8") as file_handle:
+                json.dump({
+                    "cached_at": entry["cached_at"],
+                    "description": entry["description"],
+                    "has_pic": entry["has_pic"],
+                    "mime": entry["mime"],
+                }, file_handle, ensure_ascii=False)
+            if pic:
+                with open(encode_path(pic_path), "wb") as file_handle:
+                    file_handle.write(pic)
+            else:
+                for stale in (pic_path, thumb_path):
+                    encoded = encode_path(stale)
+                    if os.path.isfile(encoded):
+                        os.remove(encoded)
+            if thumb:
+                with open(encode_path(thumb_path), "wb") as file_handle:
+                    file_handle.write(thumb)
+            elif pic:
+                # picture present but not thumbnailable: drop any stale thumb
+                encoded_thumb = encode_path(thumb_path)
+                if os.path.isfile(encoded_thumb):
+                    os.remove(encoded_thumb)
+        except OSError:
+            pass
 
     def build_search_tree(self, token):
         with self._lock:

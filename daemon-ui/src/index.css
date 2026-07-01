@@ -877,6 +877,31 @@ tr:last-child td {
   align-items: center;
   gap: 9px;
 }
+.user-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2, #23262f);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.user-avatar-fallback {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.92);
+  font-family: var(--font-body, inherit);
+}
 .user-status-dot {
   width: 7px;
   height: 7px;

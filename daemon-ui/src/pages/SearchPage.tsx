@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import NotConnectedNotice from "../components/NotConnectedNotice";
 import SearchBar from "../components/SearchBar";
+import UserAvatar from "../components/UserAvatar";
 import { useToast } from "../state/toast";
 
 interface SearchEntry {
@@ -750,6 +751,7 @@ export default function SearchPage() {
                             }`}
                             title={(group.freeSlots || 0) > 0 ? "Ready to download" : "Busy (no free slots)"}
                           />
+                          <UserAvatar user={group.user} />
                           <button
                             type="button"
                             className="link-button"

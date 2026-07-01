@@ -40,6 +40,7 @@ class Application:
         events.connect("file-search-response", self._on_file_search_response)
         events.connect("shared-file-list-response", self._on_shared_file_list_response)
         events.connect("shared-file-list-progress", self._on_shared_file_list_progress)
+        events.connect("user-info-response", self._on_user_info_response)
         events.connect("watch-user", self._on_watch_user)
         events.connect("server-login", self._on_server_login)
         events.connect("quit", self._on_quit)
@@ -208,6 +209,9 @@ class Application:
 
     def _on_shared_file_list_progress(self, username, _sock, position, total):
         self._state.record_user_browse_progress(username, position, total)
+
+    def _on_user_info_response(self, msg):
+        self._state.on_user_info_response(msg)
 
     def _on_watch_user(self, msg):
         if msg.user and msg.userexists is False:

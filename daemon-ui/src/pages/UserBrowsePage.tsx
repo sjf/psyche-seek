@@ -2,6 +2,7 @@ import { ChevronRight, Download, X } from "lucide-react";
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import FileTree, { FileNode, formatSize } from "../components/FileTree";
+import { invalidateUserInfo } from "../components/UserAvatar";
 import { useToast } from "../state/toast";
 
 interface BrowseProgress {
@@ -118,6 +119,18 @@ export default function UserBrowsePage() {
       el.scrollIntoView({ block: "start" });
     }
   }, [status, currentPath, expandedState, tree]);
+
+  // Opening a user's page/file listing: refresh their cached profile info
+  // (picture + description) from the peer, then drop the stale client cache so
+  // the avatar picks up any change on its next render.
+  useEffect(() => {
+    if (!username) {
+      return;
+    }
+    fetch(`/api/user/${encodeURIComponent(username)}/info/refresh`, { method: "POST" })
+      .catch(() => {})
+      .finally(() => invalidateUserInfo(username));
+  }, [username]);
 
   const retry = () => setReloadKey((key) => key + 1);
 

@@ -256,6 +256,32 @@ class DaemonAPI:
                 self.state.start_user_browse(username)
             return Response(status_code=204)
 
+        @api.get("/user/{username}/info")
+        def user_info(username: str):
+            if not username:
+                raise HTTPException(status_code=400, detail="Missing username")
+            return JSONResponse(self.state.get_user_info_state(username))
+
+        @api.post("/user/{username}/info/refresh")
+        def user_info_refresh(username: str):
+            if username:
+                self.state.start_user_info(username, force=True)
+            return Response(status_code=204)
+
+        @api.get("/user/{username}/pic")
+        def user_pic(username: str, size: str = ""):
+            if not username:
+                raise HTTPException(status_code=400, detail="Missing username")
+            result = self.state.get_user_pic(username, thumb=(size == "thumb"))
+            if result is None:
+                return Response(status_code=404)
+            data, mime = result
+            return Response(
+                content=data,
+                media_type=mime,
+                headers={"Cache-Control": "private, max-age=86400"}
+            )
+
         @api.get("/files/tree.json")
         def files_tree(search: str = ""):
             data = self._build_files_tree(search)
