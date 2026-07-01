@@ -1907,3 +1907,80 @@ tbody tr:hover td:first-child {
 .browse-tree-body .tree-row {
   scroll-margin-top: 64px;
 }
+
+.recent-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.recent-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 0.5px solid var(--border);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.recent-item:last-child {
+  border-bottom: none;
+}
+
+.recent-item:hover,
+.recent-item:focus-visible {
+  outline: none;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.recent-icon {
+  display: inline-flex;
+  color: var(--text-dim);
+}
+
+.recent-item:hover .recent-icon {
+  color: var(--cyan);
+}
+
+.recent-term {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.recent-time {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  min-width: 30px;
+  text-align: right;
+}
+
+.recent-remove {
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.recent-item:hover .recent-remove,
+.recent-item:focus-within .recent-remove {
+  opacity: 1;
+}
+
+.recent-remove:hover {
+  color: var(--danger);
+}

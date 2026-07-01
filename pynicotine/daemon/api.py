@@ -173,8 +173,14 @@ class DaemonAPI:
             if term:
                 self.state.remove_search_term(term)
             else:
-                for token in list(self.state.searches.keys()):
-                    self.state.remove_search(token)
+                self.state.clear_all_searches()
+            return Response(status_code=204)
+
+        @api.post("/search/sort")
+        def set_search_sort(term: str = Form(""), sort: str = Form(""), dir: str = Form("")):
+            if not term or not sort:
+                raise HTTPException(status_code=400, detail="Missing term or sort")
+            self.state.set_search_sort(term, sort, dir)
             return Response(status_code=204)
 
         @api.get("/search/{term}/tree.json")
