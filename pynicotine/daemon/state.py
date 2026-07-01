@@ -24,11 +24,15 @@ from pynicotine.daemon.trees import build_user_tree
 
 USER_TREE_CACHE_TTL = 24 * 60 * 60  # keep a browsed user's listing for at least a day
 USER_BROWSE_TIMEOUT = 45  # give up on an unresponsive user after this many seconds
+SEARCH_CACHE_TTL = 24 * 60 * 60  # keep search results on disk for at least a day
+SEARCH_SAVE_INTERVAL = 4  # seconds between disk writes for an actively-updating search
+SEARCH_SORT_KEYS = ("user", "speed", "folder", "file", "size", "attributes")
 
 
 class DaemonState:
     __slots__ = ("_lock", "share_files", "share_folders", "share_status", "chat_lines",
                  "searches", "search_results", "search_terms", "max_search_results",
+                 "_search_cache_index", "_search_last_saved", "_search_sort",
                  "pending_requests", "_pending_request_id", "_pending_login",
                  "_user_browse_status", "_user_browse_progress", "_user_browse_started",
                  "_user_tree_cache", "connection_info", "portmap_info",
@@ -44,6 +48,9 @@ class DaemonState:
         self.search_results = {}
         self.search_terms = {}
         self.max_search_results = 500
+        self._search_last_saved = {}
+        self._search_cache_index = self._load_search_cache_index()
+        self._search_sort = self._load_search_sort()
         self.pending_requests = {}
         self._pending_request_id = 0
         self._pending_login = None
@@ -227,21 +234,39 @@ class DaemonState:
             if term:
                 self.search_terms[term.casefold()] = token
 
-    def remove_search(self, token):
+    def remove_search(self, token, drop_cache=False):
+        term = ""
         with self._lock:
             search = self.searches.pop(token, None)
             self.search_results.pop(token, None)
+            self._search_last_saved.pop(token, None)
             if search:
                 term = search.get("term") or ""
                 if term:
                     self.search_terms.pop(term.casefold(), None)
+        # A search expiring (core "remove-search") must NOT drop the on-disk cache;
+        # only an explicit user removal does.
+        if drop_cache and term:
+            self._delete_search_cache(term)
 
     def remove_search_term(self, term):
         key = term.casefold()
         with self._lock:
             token = self.search_terms.get(key)
         if token is not None:
-            self.remove_search(token)
+            self.remove_search(token, drop_cache=True)
+        else:
+            self._delete_search_cache(term)
+
+    def clear_all_searches(self):
+        with self._lock:
+            tokens = list(self.searches.keys())
+            cached_terms = [entry.get("term", "") for entry in self._search_cache_index.values()]
+        for token in tokens:
+            self.remove_search(token, drop_cache=True)
+        for term in cached_terms:
+            if term:
+                self._delete_search_cache(term)
 
     def ensure_search(self, term):
         clean_term = term.strip()
@@ -274,39 +299,48 @@ class DaemonState:
         if not results:
             return
 
+        save_payload = None
         with self._lock:
             if token not in self.searches:
                 return
 
             items = self.search_results.setdefault(token, [])
             remaining = self.max_search_results - len(items)
-            if remaining <= 0:
-                return
+            if remaining > 0:
+                for fileinfo in results[:remaining]:
+                    _code, name, size, _ext, file_attrs = fileinfo
+                    attributes_text = ""
+                    if file_attrs is not None:
+                        h_quality, _bitrate, h_length, _length = FileListMessage.parse_audio_quality_length(
+                            size, file_attrs
+                        )
+                        if h_quality and h_length:
+                            attributes_text = f"{h_quality}, {h_length}"
+                        elif h_quality:
+                            attributes_text = h_quality
+                        elif h_length:
+                            attributes_text = h_length
+                    items.append({
+                        "user": username,
+                        "path": name,
+                        "size": size,
+                        "free_slots": free_slots,
+                        "speed": speed,
+                        "inqueue": inqueue,
+                        "attributes": attributes_text
+                    })
 
-            for fileinfo in results[:remaining]:
-                _code, name, size, _ext, file_attrs = fileinfo
-                attributes_text = ""
-                if file_attrs is not None:
-                    h_quality, _bitrate, h_length, _length = FileListMessage.parse_audio_quality_length(
-                        size, file_attrs
-                    )
-                    if h_quality and h_length:
-                        attributes_text = f"{h_quality}, {h_length}"
-                    elif h_quality:
-                        attributes_text = h_quality
-                    elif h_length:
-                        attributes_text = h_length
-                items.append({
-                    "user": username,
-                    "path": name,
-                    "size": size,
-                    "free_slots": free_slots,
-                    "speed": speed,
-                    "inqueue": inqueue,
-                    "attributes": attributes_text
-                })
+                self.searches[token]["results"] = len(items)
 
-            self.searches[token]["results"] = len(items)
+            now = time.time()
+            if items and now - self._search_last_saved.get(token, 0) >= SEARCH_SAVE_INTERVAL:
+                self._search_last_saved[token] = now
+                term = self.searches[token].get("term", "")
+                if term:
+                    save_payload = (term, self.searches[token].get("started_at", int(now)), list(items))
+
+        if save_payload:
+            self._save_search_cache(*save_payload)
 
     def get_search_snapshot(self, token):
         with self._lock:
@@ -459,8 +493,117 @@ class DaemonState:
     def build_search_tree(self, token):
         with self._lock:
             results = list(self.search_results.get(token, []))
+            term = self.searches.get(token, {}).get("term", "")
+            cached = self._search_cache_index.get(term.casefold()) if term else None
+            cached_results = list(cached["results"]) if cached else []
+
+        if cached_results:
+            seen = {(row.get("user"), row.get("path")) for row in results}
+            for row in cached_results:
+                if (row.get("user"), row.get("path")) not in seen:
+                    results.append(row)
 
         return build_search_tree(results)
+
+    @staticmethod
+    def _search_cache_dir():
+        return os.path.join(config.data_folder_path, "daemon-searchcache")
+
+    @staticmethod
+    def _search_cache_path(term):
+        digest = hashlib.sha1(term.casefold().encode("utf-8")).hexdigest()[:16]
+        return os.path.join(DaemonState._search_cache_dir(), digest + ".json")
+
+    def _load_search_cache_index(self):
+        index = {}
+        cache_dir = self._search_cache_dir()
+        try:
+            filenames = os.listdir(encode_path(cache_dir))
+        except OSError:
+            return index
+
+        now = time.time()
+        for raw_name in filenames:
+            path = os.path.join(cache_dir, os.fsdecode(raw_name))
+            try:
+                encoded = encode_path(path)
+                if now - os.path.getmtime(encoded) >= SEARCH_CACHE_TTL:
+                    continue
+                with open(encoded, "r", encoding="utf-8") as file_handle:
+                    data = json.load(file_handle)
+            except (OSError, ValueError):
+                continue
+
+            term = data.get("term")
+            if not term:
+                continue
+            index[term.casefold()] = {
+                "term": term,
+                "started_at": data.get("started_at", 0),
+                "cached_at": data.get("cached_at", now),
+                "results": data.get("results", [])
+            }
+        return index
+
+    def _save_search_cache(self, term, started_at, results):
+        entry = {
+            "term": term,
+            "started_at": started_at,
+            "cached_at": time.time(),
+            "results": results
+        }
+        with self._lock:
+            self._search_cache_index[term.casefold()] = entry
+        try:
+            os.makedirs(encode_path(self._search_cache_dir()), exist_ok=True)
+            with open(encode_path(self._search_cache_path(term)), "w", encoding="utf-8") as file_handle:
+                json.dump(entry, file_handle, ensure_ascii=False)
+        except OSError:
+            pass
+
+    def _delete_search_cache(self, term):
+        with self._lock:
+            self._search_cache_index.pop(term.casefold(), None)
+        try:
+            os.remove(encode_path(self._search_cache_path(term)))
+        except OSError:
+            pass
+
+    @staticmethod
+    def _search_sort_path():
+        return os.path.join(config.data_folder_path, "daemon-searchsort.json")
+
+    def _load_search_sort(self):
+        try:
+            with open(encode_path(self._search_sort_path()), "r", encoding="utf-8") as file_handle:
+                data = json.load(file_handle)
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        result = {}
+        for term_key, value in data.items():
+            if isinstance(value, dict) and value.get("key") in SEARCH_SORT_KEYS \
+                    and value.get("dir") in ("asc", "desc"):
+                result[term_key] = {"key": value["key"], "dir": value["dir"]}
+        return result
+
+    def _save_search_sort(self):
+        with self._lock:
+            snapshot = dict(self._search_sort)
+        try:
+            os.makedirs(encode_path(config.data_folder_path), exist_ok=True)
+            with open(encode_path(self._search_sort_path()), "w", encoding="utf-8") as file_handle:
+                json.dump(snapshot, file_handle, ensure_ascii=False)
+        except OSError:
+            pass
+
+    def set_search_sort(self, term, key, direction):
+        if not term or key not in SEARCH_SORT_KEYS or direction not in ("asc", "desc"):
+            return
+        with self._lock:
+            self._search_sort[term.casefold()] = {"key": key, "dir": direction}
+        self._save_search_sort()
 
     def request_download(self, username, virtual_path, size=0):
         events.invoke_main_thread(self._download_main_thread, username, virtual_path, size)
@@ -593,6 +736,19 @@ class DaemonState:
             searches = {
                 token: data.copy() for token, data in self.searches.items()
             }
+            live_terms = {data.get("term", "").casefold() for data in self.searches.values()}
+            for key, cached in self._search_cache_index.items():
+                if key in live_terms:
+                    continue
+                searches[f"cache:{key}"] = {
+                    "term": cached.get("term", ""),
+                    "started_at": cached.get("started_at", 0),
+                    "results": len(cached.get("results", []))
+                }
+            for entry in searches.values():
+                sort = self._search_sort.get(entry.get("term", "").casefold())
+                if sort:
+                    entry["sort"] = dict(sort)
             connection_info = self.connection_info
             portmap_info = self.portmap_info
 

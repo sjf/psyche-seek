@@ -1,6 +1,6 @@
-import { Download, FileText, Folder, Music2, Search } from "lucide-react";
+import { Download, FileText, Folder, Music2, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import NotConnectedNotice from "../components/NotConnectedNotice";
 import SearchBar from "../components/SearchBar";
@@ -10,6 +10,7 @@ interface SearchEntry {
   term: string;
   started_at: number;
   results: number;
+  sort?: { key: SortKey; dir: SortDirection };
 }
 
 interface StatusSnapshot {
@@ -81,6 +82,64 @@ function getFileIcon(name: string) {
   return <FileText size={14} strokeWidth={1.6} />;
 }
 
+const MAX_SEARCH_CACHE_BYTES = 5 * 1024 * 1024;
+
+function persistSearchCache(cache: Map<string, ResultRow[]>, key: string) {
+  while (cache.size > 0) {
+    const json = JSON.stringify(Object.fromEntries(cache.entries()));
+    if (new Blob([json]).size > MAX_SEARCH_CACHE_BYTES) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      cache.delete(oldest);
+      continue;
+    }
+    try {
+      localStorage.setItem(key, json);
+      return;
+    } catch {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) {
+        return;
+      }
+      cache.delete(oldest);
+    }
+  }
+}
+
+function timeAgo(seconds: number) {
+  if (!seconds) {
+    return "";
+  }
+  const delta = Math.max(0, Math.floor(Date.now() / 1000) - seconds);
+  if (delta < 60) {
+    return `${delta}s`;
+  }
+  if (delta < 3600) {
+    return `${Math.floor(delta / 60)}m`;
+  }
+  if (delta < 86400) {
+    return `${Math.floor(delta / 3600)}h`;
+  }
+  return `${Math.floor(delta / 86400)}d`;
+}
+
+const SORT_KEYS: SortKey[] = ["user", "speed", "folder", "file", "size", "attributes"];
+
+function parseSortKey(value: string | null): SortKey | null {
+  return value && (SORT_KEYS as string[]).includes(value) ? (value as SortKey) : null;
+}
+
+function findSearch(searches: SearchEntry[], term: string): SearchEntry | undefined {
+  const key = term.toLowerCase();
+  return searches.find((entry) => (entry.term || "").toLowerCase() === key);
+}
+
+function sortQueryFor(entry: SearchEntry | undefined): string {
+  return entry?.sort ? `?sort=${entry.sort.key}&dir=${entry.sort.dir}` : "";
+}
+
 export default function SearchPage() {
   const { term: termParam } = useParams();
   const navigate = useNavigate();
@@ -90,11 +149,17 @@ export default function SearchPage() {
   const [activeTerm, setActiveTerm] = useState("");
   const [rows, setRows] = useState<ResultRow[]>([]);
   const [status, setStatus] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("speed");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const savedSort = useMemo(
+    () => findSearch(searches, activeTerm)?.sort ?? null,
+    [searches, activeTerm]
+  );
+  const sortKey: SortKey = parseSortKey(searchParams.get("sort")) ?? savedSort?.key ?? "speed";
+  const sortDirParam = searchParams.get("dir");
+  const sortDirection: SortDirection =
+    sortDirParam === "asc" || sortDirParam === "desc" ? sortDirParam : savedSort?.dir ?? "desc";
   const [isConnected, setIsConnected] = useState(false);
   const [statusReady, setStatusReady] = useState(false);
-  const [manualClear, setManualClear] = useState(false);
   const prefetchedRef = useRef<Set<string>>(new Set());
   const hoverTimerRef = useRef<number | null>(null);
   const pollTimer = useRef<number | null>(null);
@@ -135,13 +200,6 @@ export default function SearchPage() {
           (a, b) => (b.started_at || 0) - (a.started_at || 0)
         );
         setSearches(entries.slice(0, 50));
-        if (!termParam && !term && !manualClear && entries.length > 0) {
-          const latest = entries[0].term;
-          if (latest) {
-            setTerm(latest);
-            setActiveTerm(latest);
-          }
-        }
       } catch {
         if (active) {
           setSearches([]);
@@ -158,14 +216,13 @@ export default function SearchPage() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [term, termParam]);
+  }, []);
 
   useEffect(() => {
     if (!termParam) {
       return;
     }
     const decoded = decodeURIComponent(termParam);
-    setManualClear(false);
     setTerm(decoded);
     setActiveTerm(decoded);
   }, [termParam]);
@@ -267,13 +324,9 @@ export default function SearchPage() {
           const nextRows = buildRows(data.tree);
           setRows(nextRows);
           setStatus(nextRows.length ? "" : "");
+          cacheRef.current.delete(activeTerm);
           cacheRef.current.set(activeTerm, nextRows);
-          try {
-            const snapshot = Object.fromEntries(cacheRef.current.entries());
-            localStorage.setItem(cacheKey, JSON.stringify(snapshot));
-          } catch {
-            // Ignore cache writes.
-          }
+          persistSearchCache(cacheRef.current, cacheKey);
           return;
         }
         if (data.status === "empty" || data.status === "loading") {
@@ -359,12 +412,32 @@ export default function SearchPage() {
   }, [rows, sortDirection, sortKey]);
 
   const requestSort = (key: SortKey) => {
-    if (key === sortKey) {
-      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    const dir: SortDirection = key === sortKey ? (sortDirection === "asc" ? "desc" : "asc") : "asc";
+    const next = new URLSearchParams(searchParams);
+    next.set("sort", key);
+    next.set("dir", dir);
+    setSearchParams(next, { replace: true });
+    if (!activeTerm) {
       return;
     }
-    setSortKey(key);
-    setSortDirection("asc");
+    setSearches((prev) =>
+      prev.map((entry) =>
+        (entry.term || "").toLowerCase() === activeTerm.toLowerCase()
+          ? { ...entry, sort: { key, dir } }
+          : entry
+      )
+    );
+    const body = new URLSearchParams();
+    body.set("term", activeTerm);
+    body.set("sort", key);
+    body.set("dir", dir);
+    apiFetch("/api/search/sort", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).catch(() => {
+      // Sort still applies from the URL; persistence is best-effort.
+    });
   };
 
   const prefetchUser = (user: string) => {
@@ -479,7 +552,55 @@ export default function SearchPage() {
       // Ignore, navigation still updates the UI.
     }
     setActiveTerm(trimmed);
-    navigate(`/search/${encodeURIComponent(trimmed)}`);
+    navigate(`/search/${encodeURIComponent(trimmed)}${sortQueryFor(findSearch(searches, trimmed))}`);
+  };
+
+  const recentSearches = useMemo(() => {
+    const seen = new Set<string>();
+    const list: SearchEntry[] = [];
+    for (const entry of searches) {
+      const key = (entry.term || "").toLowerCase();
+      if (!entry.term || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      list.push(entry);
+    }
+    return list;
+  }, [searches]);
+
+  const openRecent = (entry: SearchEntry) => {
+    setTerm(entry.term);
+    setActiveTerm(entry.term);
+    navigate(`/search/${encodeURIComponent(entry.term)}${sortQueryFor(entry)}`);
+  };
+
+  const removeRecent = async (recentTerm: string) => {
+    setSearches((prev) => prev.filter((entry) => entry.term !== recentTerm));
+    const params = new URLSearchParams();
+    params.set("term", recentTerm);
+    try {
+      await apiFetch("/api/search/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString()
+      });
+    } catch {
+      // Ignore removal failures.
+    }
+  };
+
+  const clearAllRecents = async () => {
+    setSearches([]);
+    try {
+      await apiFetch("/api/search/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "term="
+      });
+    } catch {
+      // Ignore removal failures.
+    }
   };
 
   return (
@@ -502,7 +623,6 @@ export default function SearchPage() {
         onChange={setTerm}
         onSubmit={handleSearch}
         onClear={() => {
-          setManualClear(true);
           setActiveTerm("");
           setRows([]);
           setStatus("");
@@ -677,9 +797,57 @@ export default function SearchPage() {
             </table>
           </div>
         </section>
-      ) : null}
-
-      <div />
+      ) : (
+        <section className="section recent-searches">
+          <div className="section-header">
+            <h2>Recent searches</h2>
+            {recentSearches.length > 0 ? (
+              <button type="button" className="secondary-button" onClick={clearAllRecents}>
+                Clear all
+              </button>
+            ) : null}
+          </div>
+          {recentSearches.length === 0 ? (
+            <div className="empty-state">No recent searches yet. Search above to get started.</div>
+          ) : (
+            <div className="recent-list">
+              {recentSearches.map((entry) => (
+                <div
+                  key={entry.term}
+                  className="recent-item"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openRecent(entry)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      openRecent(entry);
+                    }
+                  }}
+                >
+                  <span className="recent-icon">
+                    <Search size={15} strokeWidth={1.7} />
+                  </span>
+                  <span className="recent-term">{entry.term}</span>
+                  <span className="recent-count">{entry.results} files</span>
+                  <span className="recent-time">{timeAgo(entry.started_at)}</span>
+                  <button
+                    type="button"
+                    className="recent-remove icon-button"
+                    aria-label={`Remove ${entry.term}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removeRecent(entry.term);
+                    }}
+                  >
+                    <X size={15} strokeWidth={1.7} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }
