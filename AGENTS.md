@@ -58,6 +58,13 @@ copy of each, and any number of test daemons can run side by side:
    username silently creates one) — and never use the human's real account in
    a test daemon.
 
+Unlike those three, the **transfer directories are shared**: every daemon uses
+the same download/incomplete/shared folders as the human's setup, so files land
+in one place no matter which daemon fetched them. Copy the `[transfers]` paths
+(`downloaddir`, `incompletedir`, `uploaddir`, `shared`) verbatim from
+`~/.config/psycheseek/config` into each seeded config — only the config file
+and data/cache folder stay per-daemon.
+
 Launch recipe:
 
 ```bash
@@ -72,6 +79,9 @@ cat > "$DIR/config" <<EOF
 login = <see account rules above>
 passw = <see account rules above>
 portrange = ($SLSK_PORT, $SLSK_PORT)
+
+[transfers]
+$(grep -E '^(downloaddir|incompletedir|uploaddir|shared) =' ~/.config/psycheseek/config)
 EOF
 
 WEB_PORT=$WEB_PORT WEB_HOST=127.0.0.1 .venv/bin/python pseek -d -c "$DIR/config" -u "$DIR/data"
