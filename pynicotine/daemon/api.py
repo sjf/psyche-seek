@@ -42,6 +42,18 @@ class DaemonAPI:
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
             return await call_next(request)
 
+        def start_session(response, result):
+            authenticated_user = result["username"]
+            token = self._create_session(authenticated_user)
+            response.set_cookie(
+                self._session_cookie,
+                token,
+                httponly=True,
+                samesite="lax",
+                max_age=self._session_ttl
+            )
+            return {"authenticated": True, "username": authenticated_user}
+
         @app.post("/auth/login")
         def login(response: Response, username: str = Form(""), password: str = Form("")):
             if not username or not password:
@@ -58,16 +70,29 @@ class DaemonAPI:
                     raise HTTPException(status_code=401, detail="Soulseek rejected the login")
                 raise HTTPException(status_code=503, detail="Could not reach the Soulseek server")
 
-            authenticated_user = result["username"]
-            token = self._create_session(authenticated_user)
-            response.set_cookie(
-                self._session_cookie,
-                token,
-                httponly=True,
-                samesite="lax",
-                max_age=self._session_ttl
-            )
-            return {"authenticated": True, "username": authenticated_user}
+            return start_session(response, result)
+
+        @app.post("/auth/register")
+        def register(response: Response, username: str = Form(""), password: str = Form("")):
+            # Soulseek has no separate registration: logging in with an unused
+            # username creates the account. INVALIDPASS on a fresh attempt
+            # therefore means the username already belongs to someone else.
+            if not username or not password:
+                raise HTTPException(status_code=400, detail="Missing username or password")
+
+            result = self.state.begin_login(username, password)
+            if not result["success"]:
+                reason = result.get("reason")
+                if reason == "invalid_password":
+                    raise HTTPException(status_code=409, detail="That username is already taken")
+                if reason == "invalid_username":
+                    detail = result.get("detail") or "Invalid username"
+                    raise HTTPException(status_code=400, detail=detail)
+                if reason == "rejected":
+                    raise HTTPException(status_code=401, detail="Soulseek rejected the registration")
+                raise HTTPException(status_code=503, detail="Could not reach the Soulseek server")
+
+            return start_session(response, result)
 
         @app.post("/auth/logout")
         def logout(response: Response):
@@ -802,7 +827,6 @@ class DaemonAPI:
             media_type=media_type,
             headers=headers
         )
-
 
 
 def create_app(state, local_files=False):

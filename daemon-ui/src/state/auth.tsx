@@ -8,8 +8,10 @@ interface AuthContextValue {
   error: string;
   localFiles: boolean;
   login: (username: string, password: string) => Promise<boolean>;
+  register: (username: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  clearError: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -67,19 +69,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
     };
   }, []);
 
-  const login = async (loginUser: string, password: string) => {
+  const authenticate = async (path: string, loginUser: string, password: string, failureMessage: string) => {
     setError("");
     const params = new URLSearchParams();
     params.set("username", loginUser);
     params.set("password", password);
     try {
-      const response = await fetch("/auth/login", {
+      const response = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString()
       });
       if (!response.ok) {
-        let detail = "Login failed.";
+        let detail = failureMessage;
         try {
           const payload = (await response.json()) as { detail?: string };
           if (payload.detail) {
@@ -98,12 +100,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUsername(payload.username || loginUser);
       return true;
     } catch {
-      setError("Login failed.");
+      setError(failureMessage);
       setStatus("unauthenticated");
       setUsername("");
       return false;
     }
   };
+
+  const login = (loginUser: string, password: string) =>
+    authenticate("/auth/login", loginUser, password, "Login failed.");
+
+  const register = (loginUser: string, password: string) =>
+    authenticate("/auth/register", loginUser, password, "Registration failed.");
+
+  const clearError = () => setError("");
 
   const logout = async () => {
     setError("");
@@ -117,7 +127,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const value = useMemo(
-    () => ({ status, username, error, localFiles, login, logout, refresh }),
+    () => ({ status, username, error, localFiles, login, register, logout, refresh, clearError }),
     [status, username, error, localFiles]
   );
 

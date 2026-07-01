@@ -225,4 +225,4 @@ class Application:
             reason = "invalid_username"
         else:
             reason = "rejected"
-        self._state.resolve_login(False, reason=reason)
+        self._state.resolve_login(False, reason=reason, detail=msg.rejection_detail)

@@ -30,6 +30,11 @@ SEARCH_MAX_DURATION = 180  # ... or once this many seconds pass since it started
 SEARCH_SAVE_INTERVAL = 4  # seconds between disk writes for an actively-updating search
 SEARCH_SORT_KEYS = ("user", "speed", "folder", "file", "size", "attributes")
 
+# A login round-trip can legitimately take a long time: waiting out a pending
+# reconnect-backoff timer (up to ~15s), the TCP connect, and a blocking UPnP
+# port mapping that runs before the login response is surfaced (~10s observed).
+LOGIN_TIMEOUT = 45
+
 
 def compute_search_state(entry, now, max_results=0):
     """Return "running" or "complete" for a live search entry.
@@ -159,7 +164,7 @@ class DaemonState:
             self._pending_login = pending
 
         events.invoke_main_thread(self._start_login_main_thread, username, password)
-        completed = pending["event"].wait(timeout=20)
+        completed = pending["event"].wait(timeout=LOGIN_TIMEOUT)
 
         with self._lock:
             result = pending["result"]
@@ -184,6 +189,13 @@ class DaemonState:
         if core.users is not None and core.users.login_status != UserStatus.OFFLINE:
             core.reconnect()
         else:
+            # Status is OFFLINE even while a connection attempt is in flight, and
+            # the network thread silently drops ServerConnect while one exists —
+            # a plain connect() would never send these credentials. reconnect()
+            # closes any in-flight attempt (arming a short retry timer that picks
+            # up the new credentials) and is a no-op when idle; connect() covers
+            # the idle case and cancels any pending reconnect-backoff timer.
+            core.reconnect()
             core.connect()
 
     def _restore_previous_session(self, prev_login, prev_pass, done=None):
@@ -199,12 +211,13 @@ class DaemonState:
         elif core.users is not None and core.users.login_status != UserStatus.OFFLINE:
             core.reconnect()
         else:
+            core.reconnect()
             core.connect()
 
         if done is not None:
             done.set()
 
-    def resolve_login(self, success, username=None, reason=None, checksum=None):
+    def resolve_login(self, success, username=None, reason=None, checksum=None, detail=None):
         # Runs on the main thread. Settle the config here — persist the verified
         # creds on success, or roll back to the previous session on failure —
         # before signalling, so begin_login never returns with stale creds on disk.
@@ -236,7 +249,7 @@ class DaemonState:
             if success:
                 pending["result"] = {"success": True, "username": username}
             else:
-                pending["result"] = {"success": False, "reason": reason or "failed"}
+                pending["result"] = {"success": False, "reason": reason or "failed", "detail": detail}
             pending["event"].set()
 
     def begin_logout(self):

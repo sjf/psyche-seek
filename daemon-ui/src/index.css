@@ -1624,7 +1624,8 @@ tbody tr:hover td:first-child {
   letter-spacing: 0.14em;
   color: var(--text-dim);
 }
-.login-field input[type="text"] {
+.login-field input[type="text"],
+.login-field input[type="password"] {
   padding: 11px 12px;
 }
 .login-error {
@@ -1633,6 +1634,23 @@ tbody tr:hover td:first-child {
   font-family: var(--font-body);
   letter-spacing: 0;
   text-transform: none;
+}
+.login-info {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-family: var(--font-body);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.login-card p.login-switch {
+  margin: 20px 0 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.login-switch .link-button {
+  font: inherit;
+  font-weight: 600;
 }
 
 /* ---------- settings ---------- */
