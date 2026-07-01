@@ -14,6 +14,7 @@
 - `python3 -m pycodestyle` checks formatting (line length and basic style).
 - `python3 -m pylint --recursive=y .` runs linting across the tree.
 - `python3 -m build` builds an sdist/wheel for packaging checks.
+- Desktop app (`pseek --desktop`, macOS/Windows via pywebview): see `doc/DESKTOP_APP.md`.
 
 ## Coding Style & Naming Conventions
 
