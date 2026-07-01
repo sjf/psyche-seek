@@ -127,6 +127,9 @@ function timeAgo(seconds: number) {
 
 const SORT_KEYS: SortKey[] = ["user", "speed", "folder", "file", "size", "attributes"];
 
+// Poll long enough to outlast the daemon's 3-minute search window (delay caps at 2s/poll).
+const MAX_POLL_ATTEMPTS = 100;
+
 function parseSortKey(value: string | null): SortKey | null {
   return value && (SORT_KEYS as string[]).includes(value) ? (value as SortKey) : null;
 }
@@ -149,6 +152,7 @@ export default function SearchPage() {
   const [activeTerm, setActiveTerm] = useState("");
   const [rows, setRows] = useState<ResultRow[]>([]);
   const [status, setStatus] = useState("");
+  const [searching, setSearching] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const savedSort = useMemo(
     () => findSearch(searches, activeTerm)?.sort ?? null,
@@ -233,6 +237,7 @@ export default function SearchPage() {
     if (!activeTerm) {
       setRows([]);
       setStatus("");
+      setSearching(false);
       return () => {
         active = false;
       };
@@ -245,11 +250,13 @@ export default function SearchPage() {
       setStatus("");
     } else {
       setRows([]);
-      setStatus(isConnected ? "Loading search results..." : "");
+      setStatus(isConnected ? "Searching…" : "");
     }
+    setSearching(isConnected);
 
     const scheduleNext = () => {
-      if (pollAttempts.current >= 40) {
+      if (pollAttempts.current >= MAX_POLL_ATTEMPTS) {
+        setSearching(false);
         return;
       }
       pollAttempts.current += 1;
@@ -306,6 +313,7 @@ export default function SearchPage() {
           setRows([]);
           setStatus("");
         }
+        setSearching(false);
         return;
       }
       try {
@@ -313,30 +321,45 @@ export default function SearchPage() {
         if (!response.ok) {
           if (active) {
             setStatus("Search results unavailable.");
+            setSearching(false);
           }
           return;
         }
-        const data = (await response.json()) as { status: string; tree: SearchTreeNode | null };
+        const data = (await response.json()) as {
+          status: string;
+          state?: string;
+          tree: SearchTreeNode | null;
+        };
         if (!active) {
           return;
         }
+        // The daemon reports whether the search is still running or has settled.
+        // Keep polling while it is running so late results stream in.
+        const running = data.state !== "complete";
+        setSearching(running);
         if (data.status === "ready") {
           const nextRows = buildRows(data.tree);
           setRows(nextRows);
-          setStatus(nextRows.length ? "" : "");
+          setStatus(nextRows.length ? "" : running ? "Searching…" : "No results found.");
           cacheRef.current.delete(activeTerm);
           cacheRef.current.set(activeTerm, nextRows);
           persistSearchCache(cacheRef.current, cacheKey);
+          if (running) {
+            scheduleNext();
+          }
           return;
         }
         if (data.status === "empty" || data.status === "loading") {
-          setStatus("");
+          setStatus(running ? "Searching…" : "No results found.");
           setRows([]);
-          scheduleNext();
+          if (running) {
+            scheduleNext();
+          }
           return;
         }
         setStatus("");
         setRows([]);
+        setSearching(false);
       } catch {
         if (active) {
           setStatus("Search failed.");
@@ -640,6 +663,12 @@ export default function SearchPage() {
         <section className="section">
           <div className="section-header">
             <h2>Search Results</h2>
+            {searching && (
+              <span className="search-progress" role="status" aria-live="polite">
+                <span className="spinner" />
+                Searching…
+              </span>
+            )}
           </div>
           <div className="table-card">
             <table>

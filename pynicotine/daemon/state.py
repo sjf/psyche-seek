@@ -25,8 +25,31 @@ from pynicotine.daemon.trees import build_user_tree
 USER_TREE_CACHE_TTL = 24 * 60 * 60  # keep a browsed user's listing for at least a day
 USER_BROWSE_TIMEOUT = 45  # give up on an unresponsive user after this many seconds
 SEARCH_CACHE_TTL = 24 * 60 * 60  # keep search results on disk for at least a day
+SEARCH_QUIET_PERIOD = 20   # a live search is "complete" once no new results arrive for this long
+SEARCH_MAX_DURATION = 180  # ... or once this many seconds pass since it started, whichever is first
 SEARCH_SAVE_INTERVAL = 4  # seconds between disk writes for an actively-updating search
 SEARCH_SORT_KEYS = ("user", "speed", "folder", "file", "size", "attributes")
+
+
+def compute_search_state(entry, now, max_results=0):
+    """Return "running" or "complete" for a live search entry.
+
+    Soulseek searches never formally finish; peers answer asynchronously with no
+    defined end. We treat a search as complete once the result cap is reached (no
+    further results are kept), results stop arriving for a quiet period, or a hard
+    time cap elapses.
+    """
+    started = entry.get("started_at", 0)
+    if not started:
+        return "complete"
+    if max_results and entry.get("results", 0) >= max_results:
+        return "complete"
+    if now - started >= SEARCH_MAX_DURATION:
+        return "complete"
+    last_result = entry.get("last_result_at", started)
+    if now - last_result >= SEARCH_QUIET_PERIOD:
+        return "complete"
+    return "running"
 
 
 class DaemonState:
@@ -225,9 +248,11 @@ class DaemonState:
 
     def add_search(self, token, term):
         with self._lock:
+            now = int(time.time())
             self.searches[token] = {
                 "term": term,
-                "started_at": int(time.time()),
+                "started_at": now,
+                "last_result_at": now,
                 "results": 0
             }
             self.search_results.setdefault(token, [])
@@ -286,9 +311,11 @@ class DaemonState:
         with self._lock:
             self.search_terms[key] = token
             if token not in self.searches:
+                now = int(time.time())
                 self.searches[token] = {
                     "term": clean_term,
-                    "started_at": int(time.time()),
+                    "started_at": now,
+                    "last_result_at": now,
                     "results": 0
                 }
                 self.search_results.setdefault(token, [])
@@ -304,6 +331,8 @@ class DaemonState:
             if token not in self.searches:
                 return
 
+            now = time.time()
+            self.searches[token]["last_result_at"] = now
             items = self.search_results.setdefault(token, [])
             remaining = self.max_search_results - len(items)
             if remaining > 0:
@@ -332,7 +361,6 @@ class DaemonState:
 
                 self.searches[token]["results"] = len(items)
 
-            now = time.time()
             if items and now - self._search_last_saved.get(token, 0) >= SEARCH_SAVE_INTERVAL:
                 self._search_last_saved[token] = now
                 term = self.searches[token].get("term", "")
@@ -489,6 +517,13 @@ class DaemonState:
                 json.dump({"cached_at": entry["cached_at"], "tree": entry["tree"]}, file_handle, ensure_ascii=False)
         except OSError:
             pass
+
+    def get_search_state(self, token):
+        with self._lock:
+            entry = self.searches.get(token)
+            if entry is None:
+                return "complete"
+            return compute_search_state(entry, time.time(), self.max_search_results)
 
     def build_search_tree(self, token):
         with self._lock:
@@ -795,9 +830,12 @@ class DaemonState:
             share_folders = self.share_folders
             share_status = self.share_status
             chat_lines = list(self.chat_lines)
-            searches = {
-                token: data.copy() for token, data in self.searches.items()
-            }
+            now = time.time()
+            searches = {}
+            for token, data in self.searches.items():
+                entry = data.copy()
+                entry["state"] = compute_search_state(data, now, self.max_search_results)
+                searches[token] = entry
             live_terms = {data.get("term", "").casefold() for data in self.searches.values()}
             for key, cached in self._search_cache_index.items():
                 if key in live_terms:
@@ -805,7 +843,8 @@ class DaemonState:
                 searches[f"cache:{key}"] = {
                     "term": cached.get("term", ""),
                     "started_at": cached.get("started_at", 0),
-                    "results": len(cached.get("results", []))
+                    "results": len(cached.get("results", [])),
+                    "state": "complete"
                 }
             for entry in searches.values():
                 sort = self._search_sort.get(entry.get("term", "").casefold())

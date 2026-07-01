@@ -206,9 +206,10 @@ class DaemonAPI:
             if token is None:
                 raise HTTPException(status_code=400, detail="Missing search term")
             tree = self.state.build_search_tree(token)
+            state = self.state.get_search_state(token)
             if tree is None:
-                return JSONResponse({"status": "empty", "tree": None})
-            return JSONResponse({"status": "ready", "tree": tree})
+                return JSONResponse({"status": "empty", "state": state, "tree": None})
+            return JSONResponse({"status": "ready", "state": state, "tree": tree})
 
         @api.get("/user/{username}/tree.json")
         def user_tree(username: str):
