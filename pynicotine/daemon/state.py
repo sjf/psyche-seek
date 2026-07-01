@@ -501,7 +501,7 @@ class DaemonState:
 
     @staticmethod
     def _user_cache_path(username):
-        cache_dir = os.path.join(config.data_folder_path, "daemon-usercache")
+        cache_dir = os.path.join(config.data_folder_path, "users")
         return os.path.join(cache_dir, clean_file(username) + ".json")
 
     def _load_cached_tree(self, username):
@@ -524,7 +524,7 @@ class DaemonState:
 
     def _save_cached_tree(self, username, entry):
         try:
-            cache_dir = os.path.join(config.data_folder_path, "daemon-usercache")
+            cache_dir = os.path.join(config.data_folder_path, "users")
             os.makedirs(encode_path(cache_dir), exist_ok=True)
             with open(encode_path(self._user_cache_path(username)), "w", encoding="utf-8") as file_handle:
                 json.dump({"cached_at": entry["cached_at"], "tree": entry["tree"]}, file_handle, ensure_ascii=False)
@@ -555,7 +555,7 @@ class DaemonState:
 
     @staticmethod
     def _search_cache_dir():
-        return os.path.join(config.data_folder_path, "daemon-searchcache")
+        return os.path.join(config.data_folder_path, "search")
 
     @staticmethod
     def _search_cache_path(term):
