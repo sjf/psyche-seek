@@ -703,17 +703,25 @@ class DaemonState:
     def _clear_completed_downloads_main_thread(self):
         core.downloads.clear_downloads(statuses=[TransferStatus.FINISHED])
 
+    @staticmethod
+    def _expand_config_path(path):
+        # Config paths may contain placeholders like ${NICOTINE_DATA_HOME}
+        # (the defaults do); expand them the same way the transfer code does.
+        if not path:
+            return ""
+        return os.path.normpath(os.path.expandvars(str(path)))
+
     def get_directories(self):
         transfers = config.sections["transfers"]
         shared_dirs = []
         for share in transfers.get("shared", []):
             if isinstance(share, (list, tuple)) and len(share) >= 2:
-                shared_dirs.append(str(share[1]))
+                shared_dirs.append(self._expand_config_path(share[1]))
             elif isinstance(share, dict) and share.get("path"):
-                shared_dirs.append(str(share["path"]))
+                shared_dirs.append(self._expand_config_path(share["path"]))
         return {
-            "download_dir": str(transfers.get("downloaddir") or ""),
-            "incomplete_dir": str(transfers.get("incompletedir") or ""),
+            "download_dir": self._expand_config_path(transfers.get("downloaddir")),
+            "incomplete_dir": self._expand_config_path(transfers.get("incompletedir")),
             "shared_dirs": shared_dirs
         }
 
