@@ -110,19 +110,36 @@ class DaemonAPI:
 
         @api.get("/config/directories")
         def directories():
-            download_dir = config.sections["transfers"].get("downloaddir") or ""
-            shared_dirs = []
-            for share in config.sections["transfers"].get("shared", []):
-                if isinstance(share, (list, tuple)) and len(share) >= 2:
-                    shared_dirs.append(str(share[1]))
-                elif isinstance(share, dict):
-                    share_path = share.get("path")
-                    if share_path:
-                        shared_dirs.append(str(share_path))
-            return JSONResponse({
-                "download_dir": str(download_dir) if download_dir else "",
-                "shared_dirs": shared_dirs
-            })
+            return JSONResponse(self.state.get_directories())
+
+        @api.post("/config/directories")
+        def set_directories(kind: str = Form(""), path: str = Form("")):
+            if kind not in {"download", "incomplete"}:
+                raise HTTPException(status_code=400, detail="Invalid directory kind")
+            folder_path = os.path.realpath(os.path.expanduser(path.strip()))
+            if not folder_path or not os.path.isdir(encode_path(folder_path)):
+                raise HTTPException(status_code=400, detail="Directory not found")
+            self.state.set_download_directory(folder_path, incomplete=(kind == "incomplete"))
+            return JSONResponse(self.state.get_directories())
+
+        @api.post("/config/shares")
+        def edit_shares(action: str = Form(""), path: str = Form("")):
+            folder_path = os.path.realpath(os.path.expanduser(path.strip()))
+            if action == "add":
+                if not os.path.isdir(encode_path(folder_path)):
+                    raise HTTPException(status_code=400, detail="Directory not found")
+                if not self.state.add_share(folder_path):
+                    raise HTTPException(status_code=400, detail="Could not share directory")
+            elif action == "remove":
+                if not self.state.remove_share(folder_path):
+                    raise HTTPException(status_code=404, detail="Share not found")
+            else:
+                raise HTTPException(status_code=400, detail="Invalid action")
+            return JSONResponse(self.state.get_directories())
+
+        @api.get("/fs/list")
+        def list_directory(path: str = ""):
+            return JSONResponse(self._list_directory(path))
 
         @api.post("/download")
         def download(user: str = Form(""), path: str = Form(""), size: str = Form("0")):
@@ -440,6 +457,36 @@ class DaemonAPI:
             os.startfile(path_value)  # pylint: disable=no-member
         else:
             subprocess.run(["xdg-open", path_value], check=False)
+
+    def _list_directory(self, path_value):
+        raw = (path_value or "").strip()
+        base = os.path.realpath(os.path.expanduser(raw)) if raw else os.path.expanduser("~")
+
+        if not os.path.isdir(encode_path(base)):
+            raise HTTPException(status_code=404, detail="Directory not found")
+
+        entries = []
+        try:
+            with os.scandir(encode_path(base)) as scanner:
+                for entry in scanner:
+                    name = os.fsdecode(entry.name)
+                    if name.startswith("."):
+                        continue
+                    try:
+                        if entry.is_dir():
+                            entries.append({"name": name, "path": os.path.join(base, name)})
+                    except OSError:
+                        continue
+        except OSError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+        entries.sort(key=lambda item: item["name"].lower())
+        parent = os.path.dirname(base)
+        return {
+            "path": base,
+            "parent": parent if parent and parent != base else None,
+            "entries": entries
+        }
 
     def _get_session_secret(self):
         if self._session_secret is not None:

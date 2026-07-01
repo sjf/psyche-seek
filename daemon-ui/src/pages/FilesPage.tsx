@@ -1,8 +1,8 @@
 import { FolderTree, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../api";
 import FileActionBar from "../components/FileActionBar";
-import DirectoriesModal from "../components/DirectoriesModal";
 import FileTree, { FileNode } from "../components/FileTree";
 import Modal from "../components/Modal";
 import SearchBar from "../components/SearchBar";
@@ -13,11 +13,9 @@ import { useToast } from "../state/toast";
 
 export default function FilesPage() {
   const [query, setQuery] = useState("");
-  const [showModal, setShowModal] = useState(false);
   const [tree, setTree] = useState<FileNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<FileNode | null>(null);
-  const [downloadDir, setDownloadDir] = useState("");
-  const [sharedDirs, setSharedDirs] = useState<string[]>([]);
+  const navigate = useNavigate();
   const [expandedState, setExpandedState] = useState<Record<string, boolean>>(() => {
     try {
       const raw = window.localStorage.getItem("filesTreeExpanded");
@@ -69,21 +67,9 @@ export default function FilesPage() {
         }
         const treeData = data?.tree?.children || [];
         setTree(treeData);
-        const downloadsNode = treeData.find(
-          (node: FileNode) => node.type === "dir" && node.id !== "shared" && node.path
-        );
-        setDownloadDir(downloadsNode?.path ? String(downloadsNode.path) : "");
-        const sharedNode = treeData.find((node: FileNode) => node.id === "shared");
-        const sharedPaths =
-          sharedNode?.children
-            ?.map((node: FileNode) => (node.path ? String(node.path) : null))
-            .filter((value: string | null): value is string => Boolean(value)) || [];
-        setSharedDirs(sharedPaths);
       } catch {
         if (active) {
           setTree([]);
-          setDownloadDir("");
-          setSharedDirs([]);
         }
       }
     };
@@ -375,7 +361,8 @@ export default function FilesPage() {
             type="button"
             className="icon-button ghost-button"
             aria-label="Configure directories"
-            onClick={() => setShowModal(true)}
+            title="Configure directories"
+            onClick={() => navigate("/settings#directories")}
           >
             <Settings size={16} strokeWidth={1.6} />
           </button>
@@ -419,13 +406,6 @@ export default function FilesPage() {
           </div>
         </div>
       </section>
-
-      <DirectoriesModal
-        open={showModal}
-        onClose={() => setShowModal(false)}
-        downloadDir={downloadDir}
-        sharedDirs={sharedDirs}
-      />
 
       <Modal
         open={showRename && Boolean(selectedNode)}

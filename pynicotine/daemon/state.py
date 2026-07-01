@@ -655,6 +655,68 @@ class DaemonState:
     def _clear_completed_downloads_main_thread(self):
         core.downloads.clear_downloads(statuses=[TransferStatus.FINISHED])
 
+    def get_directories(self):
+        transfers = config.sections["transfers"]
+        shared_dirs = []
+        for share in transfers.get("shared", []):
+            if isinstance(share, (list, tuple)) and len(share) >= 2:
+                shared_dirs.append(str(share[1]))
+            elif isinstance(share, dict) and share.get("path"):
+                shared_dirs.append(str(share["path"]))
+        return {
+            "download_dir": str(transfers.get("downloaddir") or ""),
+            "incomplete_dir": str(transfers.get("incompletedir") or ""),
+            "shared_dirs": shared_dirs
+        }
+
+    def set_download_directory(self, path, incomplete=False):
+        key = "incompletedir" if incomplete else "downloaddir"
+        return self._run_config_change(self._set_directory_main_thread, key, path)
+
+    def _set_directory_main_thread(self, key, path):
+        config.sections["transfers"][key] = os.path.normpath(path)
+        config.write_configuration()
+        return True
+
+    def add_share(self, path):
+        return self._run_config_change(self._add_share_main_thread, path)
+
+    def _add_share_main_thread(self, path):
+        virtual_name = core.shares.add_share(path)
+        if not virtual_name:
+            return False
+        config.write_configuration()
+        core.shares.rescan_shares()
+        return True
+
+    def remove_share(self, path):
+        return self._run_config_change(self._remove_share_main_thread, path)
+
+    def _remove_share_main_thread(self, path):
+        if not core.shares.remove_share(path):
+            return False
+        config.write_configuration()
+        core.shares.rescan_shares()
+        return True
+
+    def _run_config_change(self, target, *args):
+        done = threading.Event()
+        result = {"value": False, "error": None}
+
+        def run():
+            try:
+                result["value"] = target(*args)
+            except Exception as error:  # noqa: BLE001
+                result["error"] = error
+            finally:
+                done.set()
+
+        events.invoke_main_thread(run)
+        done.wait(timeout=5)
+        if result["error"] is not None:
+            raise result["error"]
+        return result["value"]
+
     def set_download_override(self, username, virtual_path, local_path):
         key = username + virtual_path
         with self._lock:

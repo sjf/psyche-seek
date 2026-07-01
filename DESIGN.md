@@ -36,8 +36,8 @@ Text tiers run from `#ECEBF6` (primary) through `#A5A3C8` and `#6F6D97`
 | Family | Role |
 | ------ | ---- |
 | [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch) | Display — brand wordmark, headings |
-| [Sora](https://fonts.google.com/specimen/Sora) | Body / UI |
-| [JetBrains Mono](https://fonts.google.com/specimen/JetBrains+Mono) | Data — sizes, bitrates, paths, timestamps |
+| [Sora](https://fonts.google.com/specimen/Sora) | Body / UI — **including all file names and filesystem paths** |
+| [JetBrains Mono](https://fonts.google.com/specimen/JetBrains+Mono) | Numeric data — sizes, bitrates, timestamps; uppercase letter-spaced labels/column headers. **Never** file names or paths |
 
 ## Principles
 
@@ -48,7 +48,17 @@ Text tiers run from `#ECEBF6` (primary) through `#A5A3C8` and `#6F6D97`
 - **Motion on the moments that matter.** A staggered page-load reveal, the
   folder-open animation in the file tree, and hover/focus glows — not motion
   everywhere.
-- **Data reads like a terminal.** Monospace for every number and path; uppercase,
-  letter-spaced mono for column headers and labels.
+- **Numbers read like a terminal.** Monospace for sizes, bitrates and timestamps;
+  uppercase, letter-spaced mono for column headers. But **never for file names or
+  paths** — those always use the body font (Sora), even inside the file tree.
+- **User data is framed.** Values the user provided or can edit — paths above all —
+  are shown inside outlined field-style boxes (border + faint surface), so they
+  read as editable data rather than static labels. Plain text is for our copy;
+  boxed text is for theirs.
+- **Row actions are icons.** Per-item actions (change folder, add, remove) are
+  icon-only square buttons aligned to the right of the value they act on — no text
+  labels on repeated row controls.
+- **Destructive actions confirm.** Removing a share, deleting a file, or any
+  irreversible action opens a confirmation modal before it takes effect.
 
 The design tokens live in [`daemon-ui/src/index.css`](daemon-ui/src/index.css).

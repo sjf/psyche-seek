@@ -23,6 +23,20 @@ class _StartupError(Exception):
     """A startup problem with a user-facing message (and, ideally, a recovery tip)."""
 
 
+class _DesktopApi:
+    """Bridge exposed to the web UI as ``window.pywebview.api`` for native dialogs."""
+
+    def pick_folder(self):
+        import webview
+        window = webview.active_window()
+        if window is None:
+            return None
+        result = window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not result:
+            return None
+        return result[0]
+
+
 def _show_error_dialog(title, message):
     """Show a native error dialog, falling back to the log if none is available."""
     try:
@@ -145,7 +159,9 @@ def _launch():
                 "PsycheSeek's background service didn't start."
                 + (f"\n\n{detail}" if detail else "")
             )
-        webview.create_window(WINDOW_TITLE, f"http://{host}:{port}", width=1280, height=860)
+        webview.create_window(
+            WINDOW_TITLE, f"http://{host}:{port}", width=1280, height=860, js_api=_DesktopApi()
+        )
         _watch_daemon(webview, daemon_thread, daemon_error, shutting_down)
         webview.start()
     finally:
