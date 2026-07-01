@@ -15,6 +15,7 @@
 - `python3 -m pylint --recursive=y .` runs linting across the tree.
 - `python3 -m build` builds an sdist/wheel for packaging checks.
 - Desktop app (`pseek --desktop`, macOS/Windows via pywebview): see `doc/DESKTOP_APP.md`.
+- Never run servers on the default ports (FastAPI daemon 7007, Vite dev server 5173) — those are reserved for human developers. Always pick alternate ports (e.g. 7017 and 5183) when starting the daemon or front-end.
 
 ## Coding Style & Naming Conventions
 
