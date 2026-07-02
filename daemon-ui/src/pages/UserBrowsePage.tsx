@@ -1,8 +1,8 @@
-import { ChevronRight, Download, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, Download } from "lucide-react";
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import FileTree, { FileNode, formatSize } from "../components/FileTree";
-import { invalidateUserInfo } from "../components/UserAvatar";
+import FileTree, { FileNode, formatSize, MUSIC_FILE_RE } from "../components/FileTree";
+import { fetchUserInfo, hueFor, invalidateUserInfo, userInitials, UserInfo } from "../components/UserAvatar";
 import { useToast } from "../state/toast";
 
 interface BrowseProgress {
@@ -19,6 +19,148 @@ function collectFiles(node: FileNode): FileNode[] {
   return (node.children || []).flatMap(collectFiles);
 }
 
+interface ShareSummary {
+  tracks: number;
+  dirs: number;
+  size: number;
+}
+
+function plural(count: number, word: string) {
+  return count === 1 ? word : `${word}s`;
+}
+
+function countryFlag(code: string) {
+  return code
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "")
+    .replace(/./g, (char) => String.fromCodePoint(127397 + char.charCodeAt(0)));
+}
+
+function countryName(code: string) {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" }).of(code.toUpperCase()) || code;
+  } catch {
+    return code;
+  }
+}
+
+function summarizeShares(tree: FileNode[]): ShareSummary {
+  let tracks = 0;
+  let dirs = 0;
+  let size = 0;
+  const walk = (node: FileNode) => {
+    if (node.type === "dir") {
+      dirs += 1;
+      (node.children || []).forEach(walk);
+      return;
+    }
+    if (node.type === "file") {
+      size += Number(node.size) || 0;
+      if (MUSIC_FILE_RE.test(node.name)) {
+        tracks += 1;
+      }
+    }
+  };
+  tree.forEach(walk);
+  return { tracks, dirs, size };
+}
+
+function BrowseUserProfile({
+  username,
+  infoKey,
+  summary
+}: {
+  username: string;
+  infoKey: number;
+  summary: ShareSummary | null;
+}) {
+  const [info, setInfo] = useState<UserInfo | null>(null);
+  const [imgFailed, setImgFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setImgFailed(false);
+    fetchUserInfo(username).then((result) => {
+      if (active) {
+        setInfo(result);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [username, infoKey]);
+
+  const showPic = info?.status === "ready" && info.hasPic && !imgFailed;
+
+  return (
+    <section className="browse-profile">
+      <span
+        className="browse-profile-avatar"
+        style={showPic ? undefined : { backgroundColor: `hsl(${hueFor(username)} 45% 32%)` }}
+      >
+        {showPic ? (
+          <img
+            src={`/api/user/${encodeURIComponent(username)}/pic?v=${info?.cachedAt ?? 0}`}
+            alt=""
+            onError={() => setImgFailed(true)}
+          />
+        ) : (
+          <span className="browse-profile-avatar-fallback">{userInitials(username)}</span>
+        )}
+      </span>
+      <div className="browse-profile-meta">
+        <h1 className="browse-profile-name">{username}</h1>
+        {summary || info?.status === "ready" ? (
+          <div className="browse-profile-stats">
+            {info?.userStatus ? (
+              <span className={`browse-profile-stat stat-${info.userStatus}`}>{info.userStatus}</span>
+            ) : null}
+            {info?.country ? (
+              <span className="browse-profile-stat browse-profile-flag" title={countryName(info.country)}>
+                {countryFlag(info.country)}
+              </span>
+            ) : null}
+            {summary ? (
+              <>
+                <span className="browse-profile-stat">
+                  <strong>{summary.tracks.toLocaleString()}</strong> {plural(summary.tracks, "track")}
+                </span>
+                <span className="browse-profile-stat">
+                  <strong>{summary.dirs.toLocaleString()}</strong> {plural(summary.dirs, "folder")}
+                </span>
+                <span className="browse-profile-stat">
+                  <strong>{formatSize(summary.size)}</strong> shared
+                </span>
+              </>
+            ) : null}
+            {info?.totalUploads ? (
+              <span className="browse-profile-stat">
+                <strong>{info.totalUploads.toLocaleString()}</strong> {plural(info.totalUploads, "slot")}
+              </span>
+            ) : null}
+            {info?.slotsFree != null ? (
+              <span className={`browse-profile-stat ${info.slotsFree ? "stat-good" : "stat-bad"}`}>
+                {info.slotsFree ? "slot free" : "slots full"}
+              </span>
+            ) : null}
+            {info?.queueSize ? (
+              <span className="browse-profile-stat">
+                <strong>{info.queueSize.toLocaleString()}</strong> in queue
+              </span>
+            ) : null}
+            {info?.avgSpeed ? (
+              <span className="browse-profile-stat">
+                <strong>{formatSize(info.avgSpeed)}/s</strong> avg speed
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        {info?.description ? <p className="browse-profile-desc">{info.description}</p> : null}
+      </div>
+    </section>
+  );
+}
+
 export default function UserBrowsePage() {
   const { username: usernameParam } = useParams();
   const username = usernameParam || "";
@@ -31,6 +173,7 @@ export default function UserBrowsePage() {
   const [tree, setTree] = useState<FileNode[]>([]);
   const [progress, setProgress] = useState<BrowseProgress | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [infoKey, setInfoKey] = useState(0);
   const [expandedState, setExpandedState] = useState<Record<string, boolean>>({});
   const bodyRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<number | null>(null);
@@ -121,15 +264,45 @@ export default function UserBrowsePage() {
   }, [status, currentPath, expandedState, tree]);
 
   // Opening a user's page/file listing: refresh their cached profile info
-  // (picture + description) from the peer, then drop the stale client cache so
-  // the avatar picks up any change on its next render.
+  // (picture, description, slots) from the peer. The refresh endpoint returns
+  // before the peer answers, so poll until the server cache advances (or we
+  // give up), then drop the stale client cache and re-render the profile.
   useEffect(() => {
     if (!username) {
       return;
     }
-    fetch(`/api/user/${encodeURIComponent(username)}/info/refresh`, { method: "POST" })
-      .catch(() => {})
-      .finally(() => invalidateUserInfo(username));
+    let active = true;
+    const infoUrl = `/api/user/${encodeURIComponent(username)}/info`;
+    const cachedAt = async () => {
+      const data = (await (await fetch(infoUrl)).json()) as { status?: string; cached_at?: number };
+      return data.status === "ready" ? data.cached_at || 0 : 0;
+    };
+    (async () => {
+      let before = 0;
+      try {
+        before = await cachedAt();
+      } catch {}
+      try {
+        await fetch(`${infoUrl}/refresh`, { method: "POST" });
+      } catch {}
+      for (let attempt = 0; attempt < 10 && active; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        try {
+          if ((await cachedAt()) > before) {
+            break;
+          }
+        } catch {
+          break;
+        }
+      }
+      if (active) {
+        invalidateUserInfo(username);
+        setInfoKey((key) => key + 1);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, [username]);
 
   const retry = () => setReloadKey((key) => key + 1);
@@ -157,6 +330,14 @@ export default function UserBrowsePage() {
     [navigateToFolder]
   );
 
+  const goBack = useCallback(() => {
+    if (window.history.state && window.history.state.idx > 0) {
+      navigate(-1);
+    } else {
+      navigate("/search");
+    }
+  }, [navigate]);
+
   const download = useCallback(
     async (path: string, size: number) => {
       if (!path) {
@@ -179,6 +360,15 @@ export default function UserBrowsePage() {
       }
     },
     [addToast, username]
+  );
+
+  const handleSelect = useCallback(
+    (node: FileNode) => {
+      if (node.type === "file") {
+        download(String(node.path || ""), Number(node.size) || 0);
+      }
+    },
+    [download]
   );
 
   const renderActions = useCallback(
@@ -225,6 +415,8 @@ export default function UserBrowsePage() {
     [addToast, download]
   );
 
+  const summary = useMemo(() => (status === "ready" && tree.length ? summarizeShares(tree) : null), [status, tree]);
+
   const crumbs = useMemo(() => {
     const parts = currentPath ? currentPath.split("\\").filter(Boolean) : [];
     const list: { label: string; path: string }[] = [];
@@ -239,17 +431,17 @@ export default function UserBrowsePage() {
   return (
     <div className="page browse-page">
       <div className="browse-topbar">
-        <button
-          type="button"
-          className="icon-button ghost-button"
-          aria-label="Back to search"
-          title="Back to search"
-          onClick={() => navigate("/search")}
-        >
-          <X size={18} strokeWidth={1.6} />
-        </button>
         <nav className="browse-crumbs" aria-label="Location">
-          <button type="button" className="link-button browse-crumb-user" onClick={() => navigateToFolder("")}>
+          <button
+            type="button"
+            className="link-button browse-crumb-user"
+            onClick={() => {
+              if (currentPath) {
+                navigateToFolder("");
+              }
+              window.scrollTo(0, 0);
+            }}
+          >
             {username}
           </button>
           {crumbs.map((crumb) => (
@@ -261,7 +453,12 @@ export default function UserBrowsePage() {
             </span>
           ))}
         </nav>
+        <button type="button" className="icon-button ghost-button" aria-label="Back" title="Back" onClick={goBack}>
+          <ArrowLeft size={18} strokeWidth={1.6} />
+        </button>
       </div>
+
+      <BrowseUserProfile username={username} infoKey={infoKey} summary={summary} />
 
       <div className="browse-tree-body tree-panel" ref={bodyRef}>
         {status === "loading" ? (
@@ -306,7 +503,7 @@ export default function UserBrowsePage() {
               key={node.id}
               node={node}
               selectedId={currentPath}
-              onSelect={() => {}}
+              onSelect={handleSelect}
               onActivate={handleActivate}
               expandedState={expandedState}
               onToggle={handleToggle}

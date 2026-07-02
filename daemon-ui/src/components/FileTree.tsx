@@ -11,6 +11,8 @@ export interface FileNode {
   children?: FileNode[];
 }
 
+export const MUSIC_FILE_RE = /\.(mp3|flac|ogg|opus|wav|aac|m4a|wma|alac|aiff|ape)$/i;
+
 export function formatSize(bytes: number) {
   if (!bytes) {
     return "0 B";
@@ -57,7 +59,7 @@ export default function FileTree({
       ? expanded
         ? <FolderOpen size={16} strokeWidth={1.6} />
         : <Folder size={16} strokeWidth={1.6} />
-      : node.name.match(/\.(mp3|flac|ogg|opus|wav|aac|m4a|wma|alac|aiff|ape)$/i)
+      : node.name.match(MUSIC_FILE_RE)
         ? <Music2 size={16} strokeWidth={1.6} />
         : <FileText size={16} strokeWidth={1.6} />;
 

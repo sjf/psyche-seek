@@ -72,7 +72,7 @@ class DaemonState:
                  "_user_browse_status", "_user_browse_progress", "_user_browse_started",
                  "_user_tree_cache", "connection_info", "portmap_info",
                  "download_path_overrides", "_user_info_cache", "_user_info_status",
-                 "_user_info_started")
+                 "_user_info_started", "_user_watch")
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -97,6 +97,7 @@ class DaemonState:
         self._user_info_cache = {}
         self._user_info_status = {}
         self._user_info_started = {}
+        self._user_watch = {}
         self.connection_info = ""
         self.portmap_info = ""
         self.download_path_overrides = {}
@@ -566,7 +567,7 @@ class DaemonState:
         with self._lock:
             cached = self._user_info_cache.get(username)
             if cached and now - cached["cached_at"] < USER_INFO_CACHE_TTL:
-                return self._user_info_payload(cached)
+                return self._user_info_payload(username, cached)
 
             status = self._user_info_status.get(username)
             if status == "loading":
@@ -580,7 +581,7 @@ class DaemonState:
         if disk_entry is not None:
             with self._lock:
                 self._user_info_cache[username] = disk_entry
-            return self._user_info_payload(disk_entry)
+            return self._user_info_payload(username, disk_entry)
 
         return self.start_user_info(username)
 
@@ -598,7 +599,7 @@ class DaemonState:
         with self._lock:
             cached = self._user_info_cache.get(username)
             if not force and cached and now - cached["cached_at"] < USER_INFO_CACHE_TTL:
-                return self._user_info_payload(cached)
+                return self._user_info_payload(username, cached)
 
             if self._user_info_status.get(username) == "loading":
                 started = self._user_info_started.get(username, now)
@@ -612,8 +613,49 @@ class DaemonState:
         return {"status": "loading", "description": "", "has_pic": False}
 
     def _request_user_info_main_thread(self, username):
-        if username:
-            core.send_message_to_peer(username, UserInfoRequest())
+        if not username:
+            return
+        core.send_message_to_peer(username, UserInfoRequest())
+        # Track live status/speed/country alongside the profile. Watching gives
+        # the initial stats and pushes status changes; stats are re-requested
+        # explicitly since the server never pushes stat updates.
+        self._user_watch.setdefault(username, {})
+        core.users.watch_user(username, context="daemon-userinfo")
+        core.users.request_user_stats(username)
+
+    def on_user_stats(self, msg):
+        username = getattr(msg, "user", None)
+        watch = self._user_watch.get(username)
+        if watch is None:
+            return
+        watch["avg_speed"] = getattr(msg, "avgspeed", None)
+        status = getattr(msg, "status", None)
+        if status is not None:
+            watch["status"] = self._status_name(status)
+        country = getattr(msg, "country", None)
+        if country:
+            watch["country"] = country
+
+    def on_user_status(self, msg):
+        username = getattr(msg, "user", None)
+        watch = self._user_watch.get(username)
+        if watch is None or msg.status is None:
+            return
+        watch["status"] = self._status_name(msg.status)
+
+    def on_user_country(self, username, country_code):
+        watch = self._user_watch.get(username)
+        if watch is None or not country_code:
+            return
+        watch["country"] = country_code
+
+    @staticmethod
+    def _status_name(status):
+        return {
+            UserStatus.OFFLINE: "offline",
+            UserStatus.AWAY: "away",
+            UserStatus.ONLINE: "online",
+        }.get(status)
 
     def on_user_info_response(self, msg):
         username = getattr(msg, "username", None)
@@ -621,11 +663,15 @@ class DaemonState:
             return
 
         pic = getattr(msg, "pic", None) or None
+        slots_free = getattr(msg, "slotsavail", None)
         entry = {
             "description": getattr(msg, "descr", "") or "",
             "has_pic": bool(pic),
             "mime": self._detect_image_mime(pic) if pic else "",
             "cached_at": time.time(),
+            "total_uploads": getattr(msg, "totalupl", None),
+            "queue_size": getattr(msg, "queuesize", None),
+            "slots_free": bool(slots_free) if slots_free is not None else None,
         }
         with self._lock:
             self._user_info_cache[username] = entry
@@ -691,13 +737,19 @@ class DaemonState:
             return None
         return data, meta.get("mime") or "application/octet-stream"
 
-    @staticmethod
-    def _user_info_payload(entry):
+    def _user_info_payload(self, username, entry):
+        watch = self._user_watch.get(username) or {}
         return {
             "status": "ready",
             "description": entry.get("description", ""),
             "has_pic": bool(entry.get("has_pic")),
             "cached_at": int(entry.get("cached_at", 0)),
+            "total_uploads": entry.get("total_uploads"),
+            "queue_size": entry.get("queue_size"),
+            "slots_free": entry.get("slots_free"),
+            "user_status": watch.get("status"),
+            "avg_speed": watch.get("avg_speed"),
+            "country": watch.get("country"),
         }
 
     @staticmethod
@@ -766,6 +818,9 @@ class DaemonState:
             "has_pic": bool(data.get("has_pic")),
             "mime": data.get("mime", ""),
             "cached_at": data.get("cached_at", time.time()),
+            "total_uploads": data.get("total_uploads"),
+            "queue_size": data.get("queue_size"),
+            "slots_free": data.get("slots_free"),
         }
 
     def _save_cached_user_info(self, username, entry, pic):
@@ -780,6 +835,9 @@ class DaemonState:
                     "description": entry["description"],
                     "has_pic": entry["has_pic"],
                     "mime": entry["mime"],
+                    "total_uploads": entry.get("total_uploads"),
+                    "queue_size": entry.get("queue_size"),
+                    "slots_free": entry.get("slots_free"),
                 }, file_handle, ensure_ascii=False)
             if pic:
                 with open(encode_path(pic_path), "wb") as file_handle:

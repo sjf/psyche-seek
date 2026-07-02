@@ -42,6 +42,9 @@ class Application:
         events.connect("shared-file-list-progress", self._on_shared_file_list_progress)
         events.connect("user-info-response", self._on_user_info_response)
         events.connect("watch-user", self._on_watch_user)
+        events.connect("user-stats", self._on_user_stats)
+        events.connect("user-status", self._on_user_status)
+        events.connect("user-country", self._on_user_country)
         events.connect("server-login", self._on_server_login)
         events.connect("quit", self._on_quit)
 
@@ -216,6 +219,15 @@ class Application:
     def _on_watch_user(self, msg):
         if msg.user and msg.userexists is False:
             self._state.notify_user_browse_not_found(msg.user)
+
+    def _on_user_stats(self, msg):
+        self._state.on_user_stats(msg)
+
+    def _on_user_status(self, msg):
+        self._state.on_user_status(msg)
+
+    def _on_user_country(self, username, country_code):
+        self._state.on_user_country(username, country_code)
 
     def _on_server_login(self, msg):
         if msg.success:

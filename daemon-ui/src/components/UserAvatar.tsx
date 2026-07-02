@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../api";
 
-interface UserInfo {
+export type UserPresence = "online" | "away" | "offline";
+
+export interface UserInfo {
   status: "ready" | "loading" | "error";
   hasPic: boolean;
   description: string;
   cachedAt: number;
+  totalUploads: number | null;
+  queueSize: number | null;
+  slotsFree: boolean | null;
+  userStatus: UserPresence | null;
+  avgSpeed: number | null;
+  country: string | null;
 }
 
 // Shared across every avatar so a user shown on many rows is only fetched once.
@@ -26,7 +34,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchUserInfo(user: string): Promise<UserInfo> {
+export async function fetchUserInfo(user: string): Promise<UserInfo> {
   const cached = infoCache.get(user);
   if (cached) {
     return cached;
@@ -37,7 +45,18 @@ async function fetchUserInfo(user: string): Promise<UserInfo> {
   }
 
   const promise = (async (): Promise<UserInfo> => {
-    let result: UserInfo = { status: "error", hasPic: false, description: "", cachedAt: 0 };
+    let result: UserInfo = {
+      status: "error",
+      hasPic: false,
+      description: "",
+      cachedAt: 0,
+      totalUploads: null,
+      queueSize: null,
+      slotsFree: null,
+      userStatus: null,
+      avgSpeed: null,
+      country: null
+    };
     for (let attempt = 0; attempt < MAX_POLLS; attempt += 1) {
       try {
         const response = await apiFetch(`/api/user/${encodeURIComponent(user)}/info`);
@@ -49,13 +68,28 @@ async function fetchUserInfo(user: string): Promise<UserInfo> {
           description?: string;
           has_pic?: boolean;
           cached_at?: number;
+          total_uploads?: number | null;
+          queue_size?: number | null;
+          slots_free?: boolean | null;
+          user_status?: string | null;
+          avg_speed?: number | null;
+          country?: string | null;
         };
         if (data.status === "ready") {
           result = {
             status: "ready",
             hasPic: Boolean(data.has_pic),
             description: data.description || "",
-            cachedAt: data.cached_at || 0
+            cachedAt: data.cached_at || 0,
+            totalUploads: typeof data.total_uploads === "number" ? data.total_uploads : null,
+            queueSize: typeof data.queue_size === "number" ? data.queue_size : null,
+            slotsFree: typeof data.slots_free === "boolean" ? data.slots_free : null,
+            userStatus:
+              data.user_status === "online" || data.user_status === "away" || data.user_status === "offline"
+                ? data.user_status
+                : null,
+            avgSpeed: typeof data.avg_speed === "number" ? data.avg_speed : null,
+            country: typeof data.country === "string" && data.country ? data.country : null
           };
           break;
         }
@@ -76,13 +110,13 @@ async function fetchUserInfo(user: string): Promise<UserInfo> {
   return promise;
 }
 
-function initials(user: string) {
+export function userInitials(user: string) {
   const cleaned = user.replace(/[^a-zA-Z0-9]/g, "");
   return (cleaned.slice(0, 2) || user.slice(0, 2) || "?").toUpperCase();
 }
 
 // Deterministic hue per username so fallback avatars are stable and varied.
-function hueFor(user: string) {
+export function hueFor(user: string) {
   let hash = 0;
   for (let i = 0; i < user.length; i += 1) {
     hash = (hash * 31 + user.charCodeAt(i)) & 0xffffffff;
@@ -129,7 +163,7 @@ export default function UserAvatar({ user }: { user: string }) {
           onError={() => setImgFailed(true)}
         />
       ) : (
-        <span className="user-avatar-fallback">{initials(user)}</span>
+        <span className="user-avatar-fallback">{userInitials(user)}</span>
       )}
     </span>
   );
