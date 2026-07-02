@@ -664,12 +664,19 @@ export default function SearchPage() {
         <section className="section">
           <div className="section-header">
             <h2>Search Results</h2>
-            {searching && (
-              <span className="search-progress" role="status" aria-live="polite">
-                <span className="spinner" />
-                Searching…
-              </span>
-            )}
+            <div className="section-header-meta">
+              {searching && (
+                <span className="search-progress" role="status" aria-live="polite">
+                  <span className="spinner" />
+                  Searching…
+                </span>
+              )}
+              {rows.length > 0 && (
+                <span className="section-meta">
+                  {rows.length.toLocaleString()} {rows.length === 1 ? "result" : "results"}
+                </span>
+              )}
+            </div>
           </div>
           <div className="table-card">
             <table>

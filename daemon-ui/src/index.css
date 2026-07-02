@@ -382,6 +382,12 @@ a {
   letter-spacing: 0.06em;
 }
 
+.section-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .table-actions-header {
   text-align: right;
 }
