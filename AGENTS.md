@@ -34,6 +34,11 @@ Extra arguments are passed through to `pseek -d` (e.g. `-c <config> -u <datadir>
 for a test daemon's own config). To stop it, kill both listeners by port:
 `kill $(lsof -t -iTCP:$VITE_PORT -sTCP:LISTEN) $(lsof -t -iTCP:$WEB_PORT -sTCP:LISTEN)`.
 
+Whenever you start a dev server, tell the human the URL and the login
+credentials (the `login`/`passw` from the config the daemon is using) in your
+chat response. These are all test accounts — the passwords are not sensitive,
+so print them in plain text; don't mask or withhold them.
+
 ### Test daemons (multiple can coexist)
 
 A daemon instance owns three exclusive resources. Give every instance its own
