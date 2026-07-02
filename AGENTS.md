@@ -41,6 +41,26 @@ so print them in plain text; don't mask or withhold them.
 
 ### Test daemons (multiple can coexist)
 
+Use `./dev-test.sh` — it automates everything in this section and the next:
+
+```bash
+./dev-test.sh start            # online daemon: claims a .creds account so the web login works
+./dev-test.sh start --offline  # wrong creds, no account claimed — web login impossible, API testing only
+./dev-test.sh start --dir DIR  # keep config/data/dev.log in DIR instead of mktemp
+./dev-test.sh stop DIR         # kill both listeners, release any .creds claim
+```
+
+Use `--offline` for daemons only you will talk to (mint a session cookie for
+authed API calls); when the human needs to log in, use the online default.
+
+`start` probes free ports, seeds a per-daemon config (copying the human's
+`[transfers]` paths), launches dev.sh detached, waits for health, and prints
+the URL and login credentials — relay those to the human in chat. Tear down
+with the `stop` line it prints; don't kill by hand unless the script fails.
+
+The rest of this section explains the constraints the script implements — you
+need them when debugging a launch or managing daemons manually.
+
 A daemon instance owns three exclusive resources. Give every instance its own
 copy of each, and any number of test daemons can run side by side:
 
@@ -78,6 +98,9 @@ and data/cache folder stay per-daemon.
 
 ### Claiming a `.creds` account
 
+`dev-test.sh` claims and releases accounts for you; the protocol below is for
+manual use and debugging.
+
 `.creds` lives at the root of the MAIN checkout (untracked and gitignored; ask
 the human if it's missing). Worktree sessions must use the main checkout's copy
 (`git worktree list` — first entry), so every session coordinates through the
@@ -109,44 +132,12 @@ holding it — remove it and take it yourself.
 - **Release**: when you shut the daemon down (and in any end-of-session
   cleanup), strip your port from the line, leaving `username/password`.
 
-Launch recipe:
+If launching manually instead of via `dev-test.sh`: use `nohup ... &`
+(detached, log to a file) rather than a supervised background job — session
+teardown sends SIGTERM to tracked children, which silently kills the daemon
+mid-use.
 
-```bash
-free_port() { local p=$1; while lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null; do p=$((p + 1)); done; echo "$p"; }
-
-DIR=$(mktemp -d)                                  # or a session-scratchpad subdir
-SLSK_PORT=$(free_port $((2300 + RANDOM % 90)))    # random base to avoid cross-session collisions
-
-WEB_PORT=$(free_port $((7040 + RANDOM % 50)))
-VITE_PORT=$(free_port $((5180 + RANDOM % 40)))
-
-# Offline daemon (the default): wrong creds.
-SLSK_USER=john SLSK_PASS=wrong-password
-
-# Online daemon: claim a free account in $MAIN/.creds with $WEB_PORT (see
-# "Claiming a .creds account" above) and use its username/password here.
-
-cat > "$DIR/config" <<EOF
-[server]
-login = $SLSK_USER
-passw = $SLSK_PASS
-portrange = ($SLSK_PORT, $SLSK_PORT)
-
-[transfers]
-$(grep -E '^(downloaddir|incompletedir|uploaddir|shared) =' ~/.config/psycheseek/config)
-EOF
-
-WEB_PORT=$WEB_PORT VITE_PORT=$VITE_PORT WEB_HOST=127.0.0.1 nohup ./dev.sh \
-  -c "$DIR/config" -u "$DIR/data" > "$DIR/dev.log" 2>&1 < /dev/null &
-
-until curl -sf "http://127.0.0.1:$WEB_PORT/auth/me" >/dev/null; do sleep 1; done
-```
-
-Launch with `nohup ... &` (detached, log to a file) rather than as a supervised
-background job — session teardown sends SIGTERM to tracked children, which
-silently kills the daemon mid-use.
-
-To shut down your own daemon, resolve its PID from the web port —
+To shut down your own daemon manually, resolve its PID from the web port —
 `kill $(lsof -t -iTCP:$WEB_PORT -sTCP:LISTEN)`. Do not trust the launcher's
 `$!`: pseek forks, so the shell's child PID is not the daemon, and killing it
 leaves the real process holding both ports (and rewriting the config on its
