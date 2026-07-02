@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 name: Packaging
-on: [push, pull_request]
+on:
+  push:
+    tags: ["[0-9]+.*", "v[0-9]+.*"]
 permissions: {}
 
 jobs:
@@ -237,3 +239,28 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}-installer
           path: build-aux/macos/build/*.dmg
+
+  release:
+    needs: [debian, flatpak, snap, windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${{ github.ref_name }}"
+          if ! gh release view "$VER" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$VER" -R "$GITHUB_REPOSITORY" \
+              --draft --title "PsycheSeek $VER" \
+              --notes "PsycheSeek packaging artifacts for $VER."
+          fi
+          gh release upload "$VER" -R "$GITHUB_REPOSITORY" --clobber \
+            $(find artifacts -type f)
