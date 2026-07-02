@@ -17,11 +17,20 @@ Run the steps in order. If any step fails, stop and report.
 
 ## 1. Preflight
 
-- Confirm you are in a worktree on a feature branch (not `main`).
-- `git status` must be clean. If there are uncommitted changes, stop and ask
-  the user whether to commit or discard them — don't guess.
-- Record the branch name, the worktree path, and the main checkout path
-  (`git worktree list` — the first entry is the main checkout).
+- Confirm you are in a worktree that is not the main checkout.
+- If the worktree is on `main`, stop and report instead of pushing or deleting it.
+- If the worktree is on a detached `HEAD`, create a temporary branch from the
+  current `HEAD` before committing or rebasing. Prefer `sjf/yeet-<short-sha>`
+  unless a clearer branch name already exists.
+- If there are uncommitted changes, inspect `git status --short` and `git diff --stat`.
+  When the changes are the current task's work, commit them with one coherent
+  imperative message before continuing. Do not ask merely because the tree is dirty
+  or detached after the user invoked `yeet`.
+- Stop and ask only if the dirty tree contains unrelated user changes, secrets,
+  generated files that should not be committed, or anything else that makes the
+  commit scope ambiguous.
+- Record the branch name, the worktree path, and the main checkout path (`git
+  worktree list` — the first entry is the main checkout).
 
 ## 2. Merge to remote main
 

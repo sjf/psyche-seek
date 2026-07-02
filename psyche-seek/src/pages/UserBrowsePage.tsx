@@ -232,6 +232,7 @@ export default function UserBrowsePage() {
   const currentPathRef = useRef(currentPath);
   currentPathRef.current = currentPath;
   const spineRequestRef = useRef<string | null>(null);
+  const autoExpandedRootRef = useRef<string | null>(null);
 
   const fetchTree = useCallback(
     async (path: string, full = false) => {
@@ -261,6 +262,7 @@ export default function UserBrowsePage() {
     setProgress(null);
     setExpandedState({});
     spineRequestRef.current = null;
+    autoExpandedRootRef.current = null;
 
     const load = async () => {
       try {
@@ -401,6 +403,25 @@ export default function UserBrowsePage() {
     },
     [addToast, fetchTree]
   );
+
+  useEffect(() => {
+    if (status !== "ready" || currentPath || tree.length !== 1) {
+      return;
+    }
+    const [rootNode] = tree;
+    if (rootNode.type !== "dir" || autoExpandedRootRef.current === rootNode.id) {
+      return;
+    }
+    autoExpandedRootRef.current = rootNode.id;
+    setExpandedState((prev) => (prev[rootNode.id] ? prev : { ...prev, [rootNode.id]: true }));
+    if (rootNode.children === undefined && rootNode.has_children) {
+      loadFolder(String(rootNode.path || rootNode.id)).then((ok) => {
+        if (!ok) {
+          setExpandedState((prev) => ({ ...prev, [rootNode.id]: false }));
+        }
+      });
+    }
+  }, [status, currentPath, tree, loadFolder]);
 
   // In a pruned (lazy) listing the folder from the URL may not be loaded yet;
   // fetch its spine once the top of the tree is in.
