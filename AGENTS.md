@@ -132,3 +132,5 @@ eventual exit, clobbering any reseeding you did in between). Never
   `dialogs/roomlist.py: stricter validation for room names`.
 - Translation updates are typically labeled `Translated using Weblate (...)`.
 - This repo does not use pull requests; merge changes directly to `main`.
+- Never add `Co-Authored-By: Claude ...` (or any other Claude Code / AI
+  collaborator trailer) to commit messages.
