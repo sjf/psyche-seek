@@ -1,5 +1,5 @@
 import { Search, X } from "lucide-react";
-import { FormEvent, ReactNode } from "react";
+import { FormEvent, KeyboardEvent, ReactNode } from "react";
 
 interface SearchBarProps {
   value: string;
@@ -28,6 +28,14 @@ export default function SearchBar({
     onSubmit();
   };
 
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || disabled) {
+      return;
+    }
+    event.preventDefault();
+    onSubmit();
+  };
+
   return (
     <form className="search-form full-width" onSubmit={handleSubmit}>
       <div className="search-input-wrapper">
@@ -35,6 +43,7 @@ export default function SearchBar({
           type="text"
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={disabled}
         />

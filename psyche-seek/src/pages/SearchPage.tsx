@@ -1,6 +1,6 @@
 import { Download, FileText, Folder, Music2, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import NotConnectedNotice from "../components/NotConnectedNotice";
 import SearchBar from "../components/SearchBar";
@@ -154,6 +154,7 @@ function sortQueryFor(entry: SearchEntry | undefined): string {
 
 export default function SearchPage() {
   const { term: termParam } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const { addToast } = useToast();
   const [term, setTerm] = useState("");
@@ -233,12 +234,17 @@ export default function SearchPage() {
 
   useEffect(() => {
     if (!termParam) {
+      setTerm("");
+      setActiveTerm("");
+      setRows([]);
+      setStatus("");
+      setSearching(false);
       return;
     }
     const decoded = decodeURIComponent(termParam);
     setTerm(decoded);
     setActiveTerm(decoded);
-  }, [termParam]);
+  }, [termParam, location.key]);
 
   useEffect(() => {
     let active = true;
@@ -564,7 +570,7 @@ export default function SearchPage() {
     await Promise.all(candidates.map((file) => requestDownload(user, file.path || "", file.size)));
   };
 
-  const runSearch = async (value: string) => {
+  const runSearch = (value: string) => {
     if (!isConnected) {
       return;
     }
@@ -572,20 +578,18 @@ export default function SearchPage() {
     if (!trimmed) {
       return;
     }
-    const params = new URLSearchParams();
-    params.set("term", trimmed);
-    try {
-      await apiFetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString()
-      });
-    } catch {
-      // Ignore, navigation still updates the UI.
-    }
     setTerm(trimmed);
     setActiveTerm(trimmed);
     navigate(`/search/${encodeURIComponent(trimmed)}${sortQueryFor(findSearch(searches, trimmed))}`);
+    const params = new URLSearchParams();
+    params.set("term", trimmed);
+    apiFetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString()
+    }).catch(() => {
+      // Ignore, navigation still updates the UI.
+    });
   };
 
   const handleSearch = () => runSearch(term);
