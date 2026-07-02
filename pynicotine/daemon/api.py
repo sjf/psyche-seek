@@ -611,11 +611,7 @@ class DaemonAPI:
             roots.append(download_dir)
 
         for share in config.sections["transfers"].get("shared", []):
-            share_path = None
-            if isinstance(share, (list, tuple)) and len(share) >= 2:
-                share_path = share[1]
-            elif isinstance(share, dict):
-                share_path = share.get("path")
+            _share_name, share_path = self._get_share_entry(share)
             if share_path:
                 roots.append(share_path)
 
@@ -629,6 +625,33 @@ class DaemonAPI:
     def _canonicalize_path(path_value):
         expanded = os.path.expandvars(os.path.expanduser(path_value))
         return os.path.realpath(os.path.abspath(expanded))
+
+    @staticmethod
+    def _get_share_entry(share):
+        if isinstance(share, (list, tuple)) and len(share) >= 2:
+            return share[0], share[1]
+        if isinstance(share, dict):
+            return share.get("name"), share.get("path")
+        return None, None
+
+    def _is_download_dir_in_shared_roots(self, download_dir):
+        if not download_dir:
+            return False
+
+        download_path = self._canonicalize_path(str(download_dir))
+        for share in config.sections["transfers"].get("shared", []):
+            _share_name, share_path = self._get_share_entry(share)
+            if not share_path:
+                continue
+
+            share_path = self._canonicalize_path(str(share_path))
+            try:
+                if os.path.commonpath([download_path, share_path]) == share_path:
+                    return True
+            except ValueError:
+                continue
+
+        return False
 
     def _resolve_media_path(self, path_value):
         if not path_value:
@@ -752,13 +775,15 @@ class DaemonAPI:
         file_filter_regex, folder_filter_regex = self._get_share_filter_regex()
 
         download_dir = config.sections["transfers"].get("downloaddir")
-        downloads_node = self._build_files_node(
-            "Downloads",
-            download_dir,
-            search_key,
-            file_filter_regex=file_filter_regex,
-            folder_filter_regex=folder_filter_regex
-        )
+        downloads_node = None
+        if not self._is_download_dir_in_shared_roots(download_dir):
+            downloads_node = self._build_files_node(
+                "Downloads",
+                download_dir,
+                search_key,
+                file_filter_regex=file_filter_regex,
+                folder_filter_regex=folder_filter_regex
+            )
 
         shared_root = {
             "id": "shared",
@@ -768,14 +793,7 @@ class DaemonAPI:
             "children": []
         }
         for share in config.sections["transfers"].get("shared", []):
-            share_path = None
-            share_name = None
-            if isinstance(share, (list, tuple)) and len(share) >= 2:
-                share_name = share[0]
-                share_path = share[1]
-            elif isinstance(share, dict):
-                share_name = share.get("name")
-                share_path = share.get("path")
+            share_name, share_path = self._get_share_entry(share)
 
             if not share_path:
                 continue
