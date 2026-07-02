@@ -1,6 +1,6 @@
 import { FolderTree, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import FileActionBar from "../components/FileActionBar";
 import FileTree, { FileNode } from "../components/FileTree";
@@ -46,6 +46,45 @@ export default function FilesPage() {
       // Ignore storage failures.
     }
   }, [expandedState]);
+
+  const [searchParams] = useSearchParams();
+  const targetPath = searchParams.get("path") || "";
+
+  useEffect(() => {
+    if (!targetPath || !tree.length) {
+      return;
+    }
+    const normalize = (value: string) => value.replace(/[\\/]+$/, "");
+    const wanted = normalize(targetPath);
+    const findChain = (nodes: FileNode[], ancestors: FileNode[]): FileNode[] | null => {
+      for (const node of nodes) {
+        const chain = [...ancestors, node];
+        if (node.path && normalize(String(node.path)) === wanted) {
+          return chain;
+        }
+        if (node.children) {
+          const found = findChain(node.children, chain);
+          if (found) {
+            return found;
+          }
+        }
+      }
+      return null;
+    };
+    const chain = findChain(tree, []);
+    if (!chain) {
+      return;
+    }
+    setExpandedState((prev) => {
+      const next = { ...prev };
+      chain.forEach((node) => {
+        next[node.id] = true;
+      });
+      return next;
+    });
+    const target = chain[chain.length - 1];
+    setSelectedNode(target);
+  }, [targetPath, tree]);
 
   useEffect(() => {
     let active = true;
@@ -361,7 +400,7 @@ export default function FilesPage() {
             type="button"
             className="icon-button ghost-button"
             aria-label="Configure directories"
-            title="Configure directories"
+            data-tooltip="Configure directories"
             onClick={() => navigate("/settings#directories")}
           >
             <Settings size={16} strokeWidth={1.6} />

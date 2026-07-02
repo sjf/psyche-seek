@@ -33,9 +33,7 @@ export default function PlayerBar() {
       (value): value is string => Boolean(value)
     );
     if (metadataParts.length > 0) {
-      const albumText = currentTrack.album
-        ? `${currentTrack.album}${currentTrack.year ? ` (${currentTrack.year})` : ""}`
-        : "";
+      const albumText = currentTrack.album || "";
       const main = metadataParts.join(" - ");
       if (!albumText) {
         return main;

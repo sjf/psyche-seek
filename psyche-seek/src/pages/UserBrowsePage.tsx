@@ -124,7 +124,7 @@ function BrowseUserProfile({
               <span className={`browse-profile-stat stat-${info.userStatus}`}>{info.userStatus}</span>
             ) : null}
             {info?.country ? (
-              <span className="browse-profile-stat browse-profile-flag" title={countryName(info.country)}>
+              <span className="browse-profile-stat browse-profile-flag" data-tooltip={countryName(info.country) || undefined}>
                 {countryFlag(info.country)}
               </span>
             ) : null}
@@ -506,7 +506,7 @@ export default function UserBrowsePage() {
   }, [navigate]);
 
   const download = useCallback(
-    async (path: string, size: number) => {
+    async (path: string, size: number, folderRoot?: string) => {
       if (!path) {
         addToast("Download failed.", "error");
         return;
@@ -515,6 +515,10 @@ export default function UserBrowsePage() {
       params.set("user", username);
       params.set("path", path);
       params.set("size", String(size || 0));
+      if (folderRoot !== undefined) {
+        params.set("preserve_folder", "1");
+        params.set("folder_root", folderRoot);
+      }
       try {
         const response = await fetch("/api/download", {
           method: "POST",
@@ -546,7 +550,7 @@ export default function UserBrowsePage() {
             type="button"
             className="icon-button icon-button-small icon-button-plain"
             aria-label="Download file"
-            title="Download file"
+            data-tooltip="Download file"
             onClick={(event) => {
               event.stopPropagation();
               download(String(node.path || ""), Number(node.size) || 0);
@@ -562,7 +566,7 @@ export default function UserBrowsePage() {
             type="button"
             className="icon-button icon-button-small icon-button-plain"
             aria-label="Download folder"
-            title="Download folder"
+            data-tooltip="Download folder"
             onClick={async (event) => {
               event.stopPropagation();
               let target = node;
@@ -588,7 +592,8 @@ export default function UserBrowsePage() {
                 addToast("No files to download.", "error");
                 return;
               }
-              files.forEach((file) => download(String(file.path || ""), Number(file.size) || 0));
+              const folderRoot = String(node.path || "");
+              files.forEach((file) => download(String(file.path || ""), Number(file.size) || 0, folderRoot));
             }}
           >
             <Download size={16} strokeWidth={1.6} />
@@ -640,7 +645,7 @@ export default function UserBrowsePage() {
             </span>
           ))}
         </nav>
-        <button type="button" className="icon-button ghost-button" aria-label="Back" title="Back" onClick={goBack}>
+        <button type="button" className="icon-button ghost-button" aria-label="Back" data-tooltip="Back" onClick={goBack}>
           <ArrowLeft size={18} strokeWidth={1.6} />
         </button>
       </div>

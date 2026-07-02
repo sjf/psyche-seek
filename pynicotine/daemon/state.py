@@ -1008,13 +1008,27 @@ class DaemonState:
             self._search_sort[term.casefold()] = {"key": key, "dir": direction}
         self._save_search_sort()
 
-    def request_download(self, username, virtual_path, size=0):
-        events.invoke_main_thread(self._download_main_thread, username, virtual_path, size)
+    def request_download(self, username, virtual_path, size=0, folder_root=None):
+        events.invoke_main_thread(self._download_main_thread, username, virtual_path, size, folder_root)
 
-    def _download_main_thread(self, username, virtual_path, size):
+    @staticmethod
+    def _get_folder_download_destination(username, virtual_path, folder_root):
+        folder_path = virtual_path.replace("/", "\\").rpartition("\\")[0]
+        if not folder_path:
+            return core.downloads.get_default_download_folder(username)
+        if folder_root:
+            return core.downloads.get_folder_destination(
+                username, folder_path, root_folder_path=folder_root.replace("/", "\\").rstrip("\\")
+            )
+        return os.path.join(core.downloads.get_default_download_folder(username), folder_path.replace("\\", os.sep))
+
+    def _download_main_thread(self, username, virtual_path, size, folder_root):
         if not username or not virtual_path:
             return
-        core.downloads.enqueue_download(username, virtual_path, size=size)
+        folder_path = None
+        if folder_root is not None:
+            folder_path = self._get_folder_download_destination(username, virtual_path, folder_root)
+        core.downloads.enqueue_download(username, virtual_path, folder_path=folder_path, size=size)
 
     def pause_download(self, username, virtual_path):
         events.invoke_main_thread(self._pause_download_main_thread, username, virtual_path)
@@ -1171,6 +1185,10 @@ class DaemonState:
                         transfer.username, transfer.virtual_path, transfer.size, transfer.folder_path)
                     if file_exists:
                         local_path = download_path
+            else:
+                download_path, _file_exists = core.downloads.get_complete_download_file_path(
+                    transfer.username, transfer.virtual_path, transfer.size, transfer.folder_path)
+                local_path = download_path
             if local_path is None and transfer.status == TransferStatus.FINISHED:
                 self.clear_download_override(transfer.username, transfer.virtual_path)
             downloads.append({
@@ -1180,6 +1198,7 @@ class DaemonState:
                 "status": transfer.status,
                 "size": transfer.size,
                 "offset": transfer.current_byte_offset or 0,
+                "speed": transfer.speed or 0,
                 "folder": transfer.folder_path or "",
                 "local_path": local_path,
                 "queued_at": transfer.queued_at or 0

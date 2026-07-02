@@ -37,7 +37,35 @@ Text tiers run from `#ECEBF6` (primary) through `#A5A3C8` and `#6F6D97`
 | ------ | ---- |
 | [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch) | Display — brand wordmark, headings |
 | [Sora](https://fonts.google.com/specimen/Sora) | Body / UI — **including all file names and filesystem paths** |
-| [JetBrains Mono](https://fonts.google.com/specimen/JetBrains+Mono) | Numeric data — sizes, bitrates, timestamps; uppercase letter-spaced labels/column headers. **Never** file names or paths |
+| [JetBrains Mono](https://fonts.google.com/specimen/JetBrains+Mono) | Log/console output only. **Not** for file metadata (sizes, bitrates, timestamps) and **never** file names or paths — those use the body font |
+
+## Buttons
+
+All buttons share the same geometry — small radius (`--r-sm`), 8×14px padding, or a
+34×34px square for icon-only buttons (`.icon-button`) — and differ only in outline
+and accent color, which encode intent:
+
+| Style | Class | Look | Use for |
+| ----- | ----- | ---- | ------- |
+| Default | (any `button`) | Soft glass fill (`--surface-2`), violet hairline border, muted text; on hover the border and text turn cyan together with a soft glow and a 1px lift | Everything unless another row applies — form submits, toolbar actions, item-level operations |
+| Primary | `.primary-button` | Filled magenta gradient, dark text, magenta glow | The single most important action of a view; use sparingly |
+| Outline | `.outline-button` | Transparent, magenta border and text | Prominent actions tied to the primary accent (e.g. play) |
+| Danger | `.danger-button` | Transparent, red border and text; red-tinted hover glow | Destructive confirmations — the Delete button in a modal |
+| Ghost / secondary | `.ghost-button`, `.secondary-button` | Transparent, faint violet hairline, muted text; cyan on hover | Quiet auxiliary actions — dismiss, cancel |
+| Link | `.link-button` | Borderless cyan text | Inline navigation that reads as a link (usernames, breadcrumbs) |
+
+Rules of thumb:
+
+- **Default first.** Most buttons are the quiet default style; reach for an accented
+  variant only when the action's role demands it, and use at most one primary per view.
+- **Item-level actions are icon-only squares** (`.icon-button` + a color class above)
+  with a `data-tooltip` and `aria-label`; no text labels on repeated row controls.
+- **Color encodes severity, not decoration:** cyan = safe/standard, red = destructive,
+  magenta = primary/emphasis. A row of actions should read mostly quiet, with color
+  only where intent differs.
+- **On hover, the outline and the icon/text are the same color.** A hovered button
+  brightens as one unit — border and content shift together to the soft tint of its
+  accent (e.g. magenta → magenta-soft), never border in one color and icon in another.
 
 ## Principles
 
@@ -48,9 +76,11 @@ Text tiers run from `#ECEBF6` (primary) through `#A5A3C8` and `#6F6D97`
 - **Motion on the moments that matter.** A staggered page-load reveal, the
   folder-open animation in the file tree, and hover/focus glows — not motion
   everywhere.
-- **Numbers read like a terminal.** Monospace for sizes, bitrates and timestamps;
-  uppercase, letter-spaced mono for column headers. But **never for file names or
-  paths** — those always use the body font (Sora), even inside the file tree.
+- **Metadata stays in the body font.** Sizes, bitrates, durations and timestamps are
+  set in Sora like the rest of the UI, one text tier dimmer than their subject;
+  monospace is reserved for log/console output. Column headers are uppercase and
+  letter-spaced, and file names and paths always use the body font, even inside the
+  file tree.
 - **User data is framed.** Values the user provided or can edit — paths above all —
   are shown inside outlined field-style boxes (border + faint surface), so they
   read as editable data rather than static labels. Plain text is for our copy;

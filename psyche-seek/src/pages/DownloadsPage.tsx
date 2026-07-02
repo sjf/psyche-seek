@@ -1,11 +1,13 @@
 import { Download, Pause, Play, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../api";
+import { PATH_SEPARATOR } from "../paths";
+import { cancelPrewarm, prewarmUser } from "../prewarm";
+import BroomIcon from "../components/BroomIcon";
 import FileActionBar from "../components/FileActionBar";
 import Modal from "../components/Modal";
 import { useAuth } from "../state/auth";
-import { useFooter } from "../state/footer";
 import { Track, usePlayer } from "../state/player";
 import { useToast } from "../state/toast";
 
@@ -16,6 +18,7 @@ interface DownloadItem {
   size: number;
   offset: number;
   status: string;
+  speed?: number;
   folder: string;
   isFolder?: boolean;
   local_path?: string | null;
@@ -48,6 +51,13 @@ function getProgress(item: DownloadItem) {
   return Math.min(100, Math.floor((item.offset / item.size) * 100));
 }
 
+function formatSpeed(item: DownloadItem) {
+  if (!item.speed || item.status.toLowerCase() !== "transferring") {
+    return "";
+  }
+  return `${formatSize(item.speed)}/s`;
+}
+
 function isFinished(status: string) {
   const value = status.toLowerCase();
   return value === "finished" || value === "completed";
@@ -57,8 +67,23 @@ function isPaused(status: string) {
   return status.toLowerCase() === "paused";
 }
 
+function shortRemotePath(path: string) {
+  const parts = path.split(/[/\\]/).filter(Boolean);
+  return parts.slice(-2).join(PATH_SEPARATOR);
+}
+
 function formatStatus(status: string) {
-  return isFinished(status) ? "done" : status;
+  if (isFinished(status)) {
+    return "Done";
+  }
+  const value = status.toLowerCase();
+  if (value === "getting status") {
+    return "Starting";
+  }
+  if (value === "transferring") {
+    return "Downloading";
+  }
+  return status;
 }
 
 function getQueuedAtDate(timestamp?: number) {
@@ -83,9 +108,40 @@ export default function DownloadsPage() {
   const [showRename, setShowRename] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [showDelete, setShowDelete] = useState(false);
+  const [confirmCancelItem, setConfirmCancelItem] = useState<DownloadItem | null>(null);
+  const [downloadsDir, setDownloadsDir] = useState("");
+  const restoreSelectedRef = useRef(
+    (() => {
+      try {
+        return window.sessionStorage.getItem("downloadsSelectedKey") || "";
+      } catch {
+        return "";
+      }
+    })()
+  );
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const response = await apiFetch("/api/config/directories");
+        if (!response.ok) {
+          return;
+        }
+        const data = (await response.json()) as { download_dir?: string };
+        if (active) {
+          setDownloadsDir(data.download_dir || "");
+        }
+      } catch {
+        // Leave the local path unlinked if the config is unavailable.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
   const navigate = useNavigate();
   const { playTrack, enqueue } = usePlayer();
-  const { setContent } = useFooter();
   const { addToast } = useToast();
   const { localFiles } = useAuth();
   const deletePath = selectedItem
@@ -186,7 +242,9 @@ export default function DownloadsPage() {
     <button
       type="button"
       className="link-button"
-      title={`Browse ${user}'s files`}
+      data-tooltip={`Browse ${user}'s files`}
+      onMouseEnter={() => prewarmUser(user)}
+      onMouseLeave={cancelPrewarm}
       onClick={(event) => {
         event.stopPropagation();
         navigate(`/user/${encodeURIComponent(user)}`);
@@ -338,28 +396,28 @@ export default function DownloadsPage() {
     setShowDelete(false);
   };
 
-  const handlePlaySelected = async () => {
-    if (!selectedItem?.local_path) {
+  const handlePlay = async (item: DownloadItem) => {
+    if (!item.local_path) {
       addToast("File not found.");
       return;
     }
-    const ok = await verifyMediaAccess(selectedItem.local_path, "Playback failed.");
+    const ok = await verifyMediaAccess(item.local_path, "Playback failed.");
     if (!ok) {
       return;
     }
-    playTrack(toTrack(selectedItem));
+    playTrack(toTrack(item));
   };
 
-  const handleQueueSelected = async () => {
-    if (!selectedItem?.local_path) {
+  const handleQueue = async (item: DownloadItem) => {
+    if (!item.local_path) {
       addToast("File not found.");
       return;
     }
-    const ok = await verifyMediaAccess(selectedItem.local_path, "Add to queue failed.");
+    const ok = await verifyMediaAccess(item.local_path, "Add to queue failed.");
     if (!ok) {
       return;
     }
-    enqueue(toTrack(selectedItem));
+    enqueue(toTrack(item));
   };
 
   const runFileAction = async (endpoint: string, path: string, failureMessage: string) => {
@@ -379,15 +437,15 @@ export default function DownloadsPage() {
     }
   };
 
-  const handleRevealSelected = () => {
-    if (selectedItem?.local_path) {
-      runFileAction("/api/files/reveal", selectedItem.local_path, "Could not reveal file.");
+  const handleReveal = (item: DownloadItem) => {
+    if (item.local_path) {
+      runFileAction("/api/files/reveal", item.local_path, "Could not reveal file.");
     }
   };
 
-  const handleOpenSelected = () => {
-    if (selectedItem?.local_path) {
-      runFileAction("/api/files/open", selectedItem.local_path, "Could not open file.");
+  const handleOpen = (item: DownloadItem) => {
+    if (item.local_path) {
+      runFileAction("/api/files/open", item.local_path, "Could not open file.");
     }
   };
 
@@ -398,55 +456,75 @@ export default function DownloadsPage() {
     src: item.local_path ? `/api/media?path=${encodeURIComponent(item.local_path)}` : undefined
   });
 
+  const downloadKey = (item: DownloadItem) => `${item.user}|${item.virtual_path || item.path}`;
+  const selectedKey = selectedItem ? downloadKey(selectedItem) : null;
+
   useEffect(() => {
-    if (!selectedItem) {
-      setContent(null);
+    if (!restoreSelectedRef.current || !items.length) {
       return;
     }
-    const fullPath = selectedItem.local_path || selectedItem.path;
+    const key = restoreSelectedRef.current;
+    restoreSelectedRef.current = "";
+    const match = items.find((item) => downloadKey(item) === key);
+    if (match) {
+      setSelectedItem((prev) => prev ?? match);
+    }
+  }, [items]);
+
+  useEffect(() => {
+    try {
+      if (selectedItem) {
+        window.sessionStorage.setItem("downloadsSelectedKey", downloadKey(selectedItem));
+      } else if (!restoreSelectedRef.current) {
+        window.sessionStorage.removeItem("downloadsSelectedKey");
+      }
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [selectedItem]);
+
+  const renderFileActions = (item: DownloadItem) => {
+    const fullPath = item.local_path || item.path;
     const pathParts = fullPath.split(/[/\\]/);
-    const parentDir = pathParts.length > 1 ? pathParts[pathParts.length - 2] : "";
-    const fileName = pathParts[pathParts.length - 1] || selectedItem.path;
-    const fileLabel = fileName;
-    const filePath = parentDir ? `${parentDir}/${fileName}` : fileName;
-    const finished = isFinished(selectedItem.status);
-    const hasLocalPath = Boolean(selectedItem.local_path);
+    const fileName = pathParts[pathParts.length - 1] || item.path;
+    const finished = isFinished(item.status);
+    const hasLocalPath = Boolean(item.local_path);
     const missingFileNotice = finished && !hasLocalPath ? "File not found on disk" : "";
-    const statusText = finished ? "" : selectedItem.status;
-    const showClear = true;
-    setContent(
+    const statusText = finished ? "" : formatStatus(item.status);
+    return (
       <FileActionBar
-        fileName={fileLabel}
-        filePath={filePath}
-        mediaPath={selectedItem.local_path ? String(selectedItem.local_path) : undefined}
+        fileName={fileName}
+        remotePath={item.virtual_path || item.path}
+        remoteUser={item.user}
+        localPath={item.local_path ? String(item.local_path) : undefined}
+        downloadsDir={downloadsDir}
+        mediaPath={finished && item.local_path ? String(item.local_path) : undefined}
         notice={missingFileNotice}
         statusText={statusText}
-        showClear={showClear}
-        onClear={() => {
-          requestAction("clear", selectedItem);
-        }}
-        onPlay={handlePlaySelected}
-        onQueue={handleQueueSelected}
-        onReveal={handleRevealSelected}
-        onOpen={handleOpenSelected}
+        onPlay={() => handlePlay(item)}
+        onQueue={() => handleQueue(item)}
+        onReveal={() => handleReveal(item)}
+        onOpen={() => handleOpen(item)}
         onRename={() => {
-          setRenameValue(
-            (selectedItem.local_path || selectedItem.path).split(/[/\\]/).pop() || ""
-          );
+          setSelectedItem(item);
+          setRenameValue((item.local_path || item.path).split(/[/\\]/).pop() || "");
           setShowRename(true);
         }}
-        onDelete={() => setShowDelete(true)}
+        onDelete={() => {
+          setSelectedItem(item);
+          setShowDelete(true);
+        }}
+        onMove={() => addToast("Move is not implemented yet.")}
         disablePlay={!finished || !hasLocalPath}
         disableQueue={!finished || !hasLocalPath}
+        showMove={finished && hasLocalPath}
         showRename={finished && hasLocalPath}
         showDelete={finished && hasLocalPath}
         showReveal={localFiles && finished && hasLocalPath}
         showOpen={localFiles && finished && hasLocalPath}
       />
     );
-
-    return () => setContent(null);
-  }, [enqueue, localFiles, playTrack, selectedItem, setContent]);
+  };
 
   return (
     <div className="page">
@@ -466,11 +544,13 @@ export default function DownloadsPage() {
         <div />
         <button
           type="button"
-          className="secondary-button"
+          className="icon-button secondary-button"
           onClick={handleClearCompleted}
           disabled={!hasCompleted}
+          aria-label="Clear completed"
+          data-tooltip="Clear completed"
         >
-          Clear completed
+          <BroomIcon size={16} strokeWidth={1.6} />
         </button>
       </div>
 
@@ -542,7 +622,7 @@ export default function DownloadsPage() {
                   </button>
                 </div>
               </th>
-              <th>
+              <th className="downloads-status-col">
                 <div className="table-sort">
                   <button type="button" className="sortable" onClick={() => requestSort("status")}>
                     Status
@@ -558,7 +638,7 @@ export default function DownloadsPage() {
                   </button>
                 </div>
               </th>
-              <th>
+              <th className="downloads-added-col">
                 <div className="table-sort">
                   <button type="button" className="sortable" onClick={() => requestSort("queued_at")}>
                     Added
@@ -593,19 +673,21 @@ export default function DownloadsPage() {
                 </tr>
               ) : null;
 
-                const rows = group.items.map((item, index) => (
+                const rows = group.items.flatMap((item, index) => [
                 <tr
                   key={`${group.key}-${item.path}`}
                   className={`results-file downloads-file${index === group.items.length - 1 ? " results-file-last" : ""}${
                     isFinished(item.status) && item.local_path ? " row-clickable" : ""
-                  }`}
+                  }${selectedKey === downloadKey(item) ? " downloads-row-selected" : ""}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setSelectedItem(item);
+                    setSelectedItem((prev) =>
+                      prev && downloadKey(prev) === downloadKey(item) ? null : item
+                    );
                   }}
                 >
                   <td className="downloads-user">{group.isFolder ? "" : userLink(item.user)}</td>
-                  <td className="downloads-path">{item.path}</td>
+                  <td className="downloads-path">{shortRemotePath(item.path)}</td>
                   <td>{formatSize(item.size)}</td>
                   <td>
                     <div className="progress-cell">
@@ -615,8 +697,13 @@ export default function DownloadsPage() {
                       <span>{getProgress(item)}%</span>
                     </div>
                   </td>
-                    <td><span className="downloads-status">{formatStatus(item.status)}</span></td>
-                    <td className="downloads-added" title={getQueuedAtTimestamp(item.queued_at)}>
+                    <td className="downloads-status-col">
+                      <span className="downloads-status">{formatStatus(item.status)}</span>
+                      {formatSpeed(item) ? (
+                        <span className="downloads-speed">{formatSpeed(item)}</span>
+                      ) : null}
+                    </td>
+                    <td className="downloads-added" data-tooltip={getQueuedAtTimestamp(item.queued_at)}>
                       {getQueuedAtDate(item.queued_at)}
                     </td>
                     <td>
@@ -656,15 +743,28 @@ export default function DownloadsPage() {
                           data-tooltip={isFinished(item.status) ? "Remove download" : "Cancel download"}
                           onClick={(event) => {
                             event.stopPropagation();
-                            requestAction(isFinished(item.status) ? "clear" : "cancel", item);
+                            if (isFinished(item.status)) {
+                              requestAction("clear", item);
+                            } else {
+                              setConfirmCancelItem(item);
+                            }
                           }}
                         >
                           <X size={14} strokeWidth={1.6} />
                         </button>
                       </div>
                     </td>
-                  </tr>
-                ));
+                  </tr>,
+                  ...(selectedKey === downloadKey(item)
+                    ? [
+                        <tr key={`${group.key}-${item.path}-detail`} className="downloads-detail-row">
+                          <td colSpan={7} onClick={(event) => event.stopPropagation()}>
+                            {renderFileActions(item)}
+                          </td>
+                        </tr>
+                      ]
+                    : [])
+                ]);
 
               return groupHeader ? [groupHeader, ...rows] : rows;
             })}
@@ -719,6 +819,35 @@ export default function DownloadsPage() {
       >
         <div className="download-delete-path">{deletePath}</div>
         <p>Delete this file from disk?</p>
+      </Modal>
+
+      <Modal
+        open={Boolean(confirmCancelItem)}
+        title="Cancel download"
+        onClose={() => setConfirmCancelItem(null)}
+        className="modal-delete"
+        footer={
+          <>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => {
+                if (confirmCancelItem) {
+                  requestAction("cancel", confirmCancelItem);
+                }
+                setConfirmCancelItem(null);
+              }}
+            >
+              Cancel download
+            </button>
+            <button type="button" className="ghost-button" onClick={() => setConfirmCancelItem(null)}>
+              Keep
+            </button>
+          </>
+        }
+      >
+        <div className="download-delete-path">{confirmCancelItem?.path}</div>
+        <p>Cancel this download?</p>
       </Modal>
     </div>
   );
