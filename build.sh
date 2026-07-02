@@ -9,9 +9,5 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 
 cd psyche-seek
-
-if [ ! -d node_modules ]; then
-  npm install
-fi
-
+npm install
 npm run build
