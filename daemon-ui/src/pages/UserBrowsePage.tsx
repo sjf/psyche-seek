@@ -133,15 +133,14 @@ function BrowseUserProfile({
                 </span>
               </>
             ) : null}
-            {info?.totalUploads ? (
-              <span className="browse-profile-stat">
-                <strong>{info.totalUploads.toLocaleString()}</strong> {plural(info.totalUploads, "slot")}
+            {info?.slotsFree === false ? (
+              <span className="browse-profile-stat stat-bad">no free slots</span>
+            ) : info?.slotsFree && info.totalUploads ? (
+              <span className="browse-profile-stat stat-good">
+                <strong>{info.totalUploads.toLocaleString()}</strong> {plural(info.totalUploads, "slot")} free
               </span>
-            ) : null}
-            {info?.slotsFree != null ? (
-              <span className={`browse-profile-stat ${info.slotsFree ? "stat-good" : "stat-bad"}`}>
-                {info.slotsFree ? "slot free" : "slots full"}
-              </span>
+            ) : info?.slotsFree ? (
+              <span className="browse-profile-stat stat-good">slot free</span>
             ) : null}
             {info?.queueSize ? (
               <span className="browse-profile-stat">
