@@ -2204,9 +2204,14 @@ tbody tr:hover td:first-child {
 
 .example-hint {
   margin: 0;
-  padding: 12px 14px 4px;
+  padding: 12px 0 4px;
   font-size: 13px;
   color: var(--text-dim);
+}
+
+.example-search-list .recent-item {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .recent-item {

@@ -860,7 +860,7 @@ export default function SearchPage() {
             statusReady && (
               <>
                 <p className="example-hint">No recent searches yet. Try one of these to get started:</p>
-                <div className="recent-list">
+                <div className="recent-list example-search-list">
                   {EXAMPLE_SEARCHES.map((example) => (
                     <div
                       key={example}
@@ -879,7 +879,6 @@ export default function SearchPage() {
                         <Search size={15} strokeWidth={1.7} />
                       </span>
                       <span className="recent-term">{example}</span>
-                      <span className="recent-count">example</span>
                     </div>
                   ))}
                 </div>
