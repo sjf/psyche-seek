@@ -2,6 +2,7 @@ import { ArrowLeft, ChevronRight, Download } from "lucide-react";
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import FileTree, { FileNode, formatSize, MUSIC_FILE_RE } from "../components/FileTree";
+import ProfileText from "../components/ProfileText";
 import { fetchUserInfo, hueFor, invalidateUserInfo, userInitials, UserInfo } from "../components/UserAvatar";
 import { useToast } from "../state/toast";
 
@@ -161,7 +162,7 @@ function BrowseUserProfile({
             ) : null}
           </div>
         ) : null}
-        {info?.description ? <p className="browse-profile-desc">{info.description}</p> : null}
+        {info?.description ? <ProfileText text={info.description} /> : null}
       </div>
     </section>
   );
