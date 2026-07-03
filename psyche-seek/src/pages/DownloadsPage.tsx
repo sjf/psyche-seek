@@ -1,5 +1,5 @@
 import { Download, Pause, Play, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../api";
 import { PATH_SEPARATOR } from "../paths";
@@ -100,6 +100,41 @@ function getQueuedAtTimestamp(timestamp?: number) {
   return new Date(timestamp * 1000).toLocaleString();
 }
 
+function SlideReveal({ closing, children }: { closing: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      return;
+    }
+    if (closing) {
+      el.style.height = `${el.scrollHeight}px`;
+      void el.offsetHeight;
+      el.style.height = "0px";
+      el.style.opacity = "0";
+      return;
+    }
+    const target = el.scrollHeight;
+    el.style.height = "0px";
+    el.style.opacity = "0";
+    void el.offsetHeight;
+    el.style.height = `${target}px`;
+    el.style.opacity = "1";
+    const settle = () => {
+      el.style.height = "auto";
+    };
+    el.addEventListener("transitionend", settle);
+    return () => el.removeEventListener("transitionend", settle);
+  }, [closing]);
+
+  return (
+    <div ref={ref} className={`downloads-detail-anim${closing ? " closing" : ""}`}>
+      {children}
+    </div>
+  );
+}
+
 export default function DownloadsPage() {
   const [items, setItems] = useState<DownloadItem[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("queued_at");
@@ -109,6 +144,8 @@ export default function DownloadsPage() {
   const [renameValue, setRenameValue] = useState("");
   const [showDelete, setShowDelete] = useState(false);
   const [confirmCancelItem, setConfirmCancelItem] = useState<DownloadItem | null>(null);
+  const [closingItem, setClosingItem] = useState<DownloadItem | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const [downloadsDir, setDownloadsDir] = useState("");
   const restoreSelectedRef = useRef(
     (() => {
@@ -458,6 +495,25 @@ export default function DownloadsPage() {
 
   const downloadKey = (item: DownloadItem) => `${item.user}|${item.virtual_path || item.path}`;
   const selectedKey = selectedItem ? downloadKey(selectedItem) : null;
+  const closingKey = closingItem ? downloadKey(closingItem) : null;
+
+  const animateClose = (item: DownloadItem) => {
+    if (closeTimerRef.current) {
+      window.clearTimeout(closeTimerRef.current);
+    }
+    setClosingItem(item);
+    closeTimerRef.current = window.setTimeout(() => {
+      setClosingItem(null);
+      closeTimerRef.current = null;
+    }, 220);
+  };
+
+  const closeDetail = () => {
+    if (selectedItem) {
+      animateClose(selectedItem);
+      setSelectedItem(null);
+    }
+  };
 
   useEffect(() => {
     if (!restoreSelectedRef.current || !items.length) {
@@ -490,7 +546,6 @@ export default function DownloadsPage() {
     const finished = isFinished(item.status);
     const hasLocalPath = Boolean(item.local_path);
     const missingFileNotice = finished && !hasLocalPath ? "File not found on disk" : "";
-    const statusText = finished ? "" : formatStatus(item.status);
     return (
       <FileActionBar
         fileName={fileName}
@@ -500,7 +555,6 @@ export default function DownloadsPage() {
         downloadsDir={downloadsDir}
         mediaPath={finished && item.local_path ? String(item.local_path) : undefined}
         notice={missingFileNotice}
-        statusText={statusText}
         onPlay={() => handlePlay(item)}
         onQueue={() => handleQueue(item)}
         onReveal={() => handleReveal(item)}
@@ -517,11 +571,12 @@ export default function DownloadsPage() {
         onMove={() => addToast("Move is not implemented yet.")}
         disablePlay={!finished || !hasLocalPath}
         disableQueue={!finished || !hasLocalPath}
-        showMove={finished && hasLocalPath}
-        showRename={finished && hasLocalPath}
-        showDelete={finished && hasLocalPath}
-        showReveal={localFiles && finished && hasLocalPath}
-        showOpen={localFiles && finished && hasLocalPath}
+        disableActions={!finished || !hasLocalPath}
+        showMove
+        showRename
+        showDelete
+        showReveal={localFiles}
+        showOpen={localFiles}
       />
     );
   };
@@ -554,7 +609,7 @@ export default function DownloadsPage() {
         </button>
       </div>
 
-      <div className="table-card" onClick={() => setSelectedItem(null)} role="presentation">
+      <div className="table-card" onClick={closeDetail} role="presentation">
         <table>
           <thead>
             <tr>
@@ -681,9 +736,14 @@ export default function DownloadsPage() {
                   }${selectedKey === downloadKey(item) ? " downloads-row-selected" : ""}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setSelectedItem((prev) =>
-                      prev && downloadKey(prev) === downloadKey(item) ? null : item
-                    );
+                    if (selectedKey === downloadKey(item)) {
+                      closeDetail();
+                    } else {
+                      if (selectedItem) {
+                        animateClose(selectedItem);
+                      }
+                      setSelectedItem(item);
+                    }
                   }}
                 >
                   <td className="downloads-user">{group.isFolder ? "" : userLink(item.user)}</td>
@@ -755,11 +815,13 @@ export default function DownloadsPage() {
                       </div>
                     </td>
                   </tr>,
-                  ...(selectedKey === downloadKey(item)
+                  ...(selectedKey === downloadKey(item) || closingKey === downloadKey(item)
                     ? [
                         <tr key={`${group.key}-${item.path}-detail`} className="downloads-detail-row">
                           <td colSpan={7} onClick={(event) => event.stopPropagation()}>
-                            {renderFileActions(item)}
+                            <SlideReveal closing={selectedKey !== downloadKey(item)}>
+                              {renderFileActions(item)}
+                            </SlideReveal>
                           </td>
                         </tr>
                       ]

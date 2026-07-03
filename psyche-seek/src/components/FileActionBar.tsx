@@ -39,6 +39,7 @@ interface FileActionBarProps {
   onMove?: () => void;
   disablePlay?: boolean;
   disableQueue?: boolean;
+  disableActions?: boolean;
   showRename?: boolean;
   showDelete?: boolean;
   showReveal?: boolean;
@@ -67,6 +68,7 @@ export default function FileActionBar({
   onMove,
   disablePlay = false,
   disableQueue = false,
+  disableActions = false,
   showRename = true,
   showDelete = true,
   showReveal = false,
@@ -336,6 +338,7 @@ export default function FileActionBar({
               onClick={onOpen}
               aria-label="Open in default app"
               data-tooltip="Open in default app"
+              disabled={disableActions}
             >
               <ExternalLink size={16} strokeWidth={1.6} />
             </button>
@@ -347,6 +350,7 @@ export default function FileActionBar({
               onClick={onReveal}
               aria-label="Reveal in file manager"
               data-tooltip="Reveal in file manager"
+              disabled={disableActions}
             >
               <FolderOpen size={16} strokeWidth={1.6} />
             </button>
@@ -358,6 +362,7 @@ export default function FileActionBar({
               onClick={onMove}
               aria-label="Move"
               data-tooltip="Move"
+              disabled={disableActions}
             >
               <FolderInput size={16} strokeWidth={1.6} />
             </button>
@@ -369,6 +374,7 @@ export default function FileActionBar({
               onClick={onRename}
               aria-label="Rename"
               data-tooltip="Rename"
+              disabled={disableActions}
             >
               <Pencil size={16} strokeWidth={1.6} />
             </button>
@@ -380,6 +386,7 @@ export default function FileActionBar({
               onClick={onDelete}
               aria-label="Delete"
               data-tooltip="Delete file"
+              disabled={disableActions}
             >
               <Trash2 size={16} strokeWidth={1.6} />
             </button>
